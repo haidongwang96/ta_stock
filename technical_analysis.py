@@ -419,9 +419,9 @@ class TeeOutput:
 def main():
     parser = argparse.ArgumentParser(description='股票技术指标分析工具')
     parser.add_argument('--code', type=str, help='股票代码，如 000001.SZ 或 000001.SZ#平安银行')
-    parser.add_argument('--start', type=str, help='开始日期 YYYYMMDD，默认60天前')
+    parser.add_argument('--start', type=str, help='开始日期 YYYYMMDD，与--end配合使用')
     parser.add_argument('--end', type=str, help='结束日期 YYYYMMDD，默认今天')
-    parser.add_argument('--days', type=int, default=10, help='显示最近N天的分析，默认10天')
+    parser.add_argument('--days', type=int, help='分析最近N天的数据，默认60天（如果同时指定了--start，则优先使用--start）')
     parser.add_argument('--output', type=str, help='保存结果到CSV文件')
     parser.add_argument('--pool', type=str, help='从股票池文件读取第一个股票代码进行分析')
 
@@ -466,9 +466,15 @@ def main():
     # 处理日期
     if not args.end:
         args.end = datetime.now().strftime('%Y%m%d')
+
     if not args.start:
-        start_dt = datetime.now() - timedelta(days=60)
+        # 如果没有指定开始日期，则使用 --days 参数（默认60天）
+        days_to_fetch = args.days if args.days else 60
+        start_dt = datetime.now() - timedelta(days=days_to_fetch)
         args.start = start_dt.strftime('%Y%m%d')
+        logger.info(f"获取最近 {days_to_fetch} 天的数据 ({args.start} 到 {args.end})")
+    else:
+        logger.info(f"使用指定的日期范围: {args.start} 到 {args.end}")
 
     # 设置输出重定向到文件
     log_filename = os.path.join(OUTPUT_DIR, f'technical_analysis_{args.code}.txt')
@@ -496,7 +502,10 @@ def main():
             df = analyzer.generate_signals(df)
 
             # 显示报告
-            analyzer.print_analysis_report(df, args.code, recent_days=args.days)
+            # 如果获取的数据超过30天，只显示最近30天；否则显示全部
+            days_fetched = args.days if args.days else 60
+            display_days = min(len(df), 100) if days_fetched > 100 else len(df)
+            analyzer.print_analysis_report(df, args.code, recent_days=display_days)
 
             # 保存结果到输出文件夹
             if args.output:

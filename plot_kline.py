@@ -36,6 +36,49 @@ COLORS = {
 }
 
 
+def load_stock_names(pool_file='pool.txt'):
+    """
+    从股票池文件读取股票代码和中文名称的映射
+    :param pool_file: 股票池文件路径
+    :return: 股票代码到中文名称的字典
+    """
+    stock_names = {}
+
+    if not os.path.exists(pool_file):
+        return stock_names
+
+    try:
+        with open(pool_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # 跳过空行和注释行
+                if not line or line.startswith('#'):
+                    continue
+                # 提取股票代码和中文名称
+                if '#' in line:
+                    parts = line.split('#')
+                    code = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else ''
+                    if code and name:
+                        stock_names[code] = name
+    except Exception as e:
+        print(f"读取股票名称文件失败: {e}")
+
+    return stock_names
+
+
+def format_stock_title(ts_code, stock_names=None):
+    """
+    格式化股票标题，包含代码和中文名称
+    :param ts_code: 股票代码
+    :param stock_names: 股票名称字典
+    :return: 格式化的标题字符串
+    """
+    if stock_names and ts_code in stock_names:
+        return f"{ts_code} {stock_names[ts_code]}"
+    return ts_code
+
+
 def load_full_analysis_data(analysis_file):
     """
     加载完整的技术分析数据
@@ -51,7 +94,7 @@ def load_full_analysis_data(analysis_file):
     return df
 
 
-def plot_professional_kline(df, stock_code, output_file=None):
+def plot_professional_kline(df, stock_code, output_file=None, stock_names=None):
     """
     绘制专业K线图（仿交易软件风格）
     包含：主图（K线+均线）、成交量、MFI、OBV
@@ -59,6 +102,7 @@ def plot_professional_kline(df, stock_code, output_file=None):
     :param df: 完整的技术分析数据
     :param stock_code: 股票代码
     :param output_file: 输出文件路径
+    :param stock_names: 股票名称字典（代码到中文名称的映射）
     """
     # 创建图表（黑色背景）
     fig = plt.figure(figsize=(18, 12), facecolor=COLORS['bg'])
@@ -149,7 +193,7 @@ def plot_professional_kline(df, stock_code, output_file=None):
     # 添加标题信息
     if len(df) > 0:
         latest = df.iloc[-1]
-        title_text = f"{stock_code}  "
+        title_text = f"{format_stock_title(stock_code, stock_names)}  "
         title_text += f"收盘:{latest['Close']:.2f}  "
         if 'pct_change' in df.columns and not pd.isna(latest['pct_change']):
             title_text += f"涨跌:{latest['pct_change']:+.2f}%  "
@@ -341,13 +385,14 @@ def plot_professional_kline(df, stock_code, output_file=None):
     plt.close()
 
 
-def plot_simple_kline(kline_file, stock_code, output_file=None):
+def plot_simple_kline(kline_file, stock_code, output_file=None, stock_names=None):
     """
     从简化的K线数据文件绘制基础K线图（无技术指标）
 
     :param kline_file: K线数据文件（只有OHLCV）
     :param stock_code: 股票代码
     :param output_file: 输出文件路径
+    :param stock_names: 股票名称字典
     """
     # 读取数据
     df = pd.read_csv(kline_file, encoding='utf-8-sig')
@@ -368,7 +413,7 @@ def plot_simple_kline(kline_file, stock_code, output_file=None):
         df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
 
     # 调用专业绘图函数（会自动计算均线）
-    plot_professional_kline(df, stock_code, output_file)
+    plot_professional_kline(df, stock_code, output_file, stock_names)
 
 
 def main():
@@ -377,9 +422,12 @@ def main():
                        help='输入文件：完整技术分析CSV或K线数据CSV')
     parser.add_argument('--code', type=str, help='股票代码（用于标题）')
     parser.add_argument('--output', type=str, help='输出图片文件路径')
+    parser.add_argument('--pool', type=str, default='pool.txt',
+                       help='股票池文件路径（用于加载股票中文名称）')
     parser.add_argument('--type', type=str, choices=['full', 'simple'],
                        default='auto',
                        help='数据类型：full=完整分析数据，simple=仅K线数据，auto=自动检测')
+
 
     args = parser.parse_args()
 
@@ -402,6 +450,11 @@ def main():
 
     print(f"读取数据: {args.input}")
 
+    # 加载股票名称映射
+    stock_names = load_stock_names(args.pool)
+    if stock_names:
+        print(f"已加载 {len(stock_names)} 个股票的中文名称")
+
     # 自动检测数据类型
     df = pd.read_csv(args.input, encoding='utf-8-sig')
     has_mfi = 'MFI' in df.columns or 'mfi' in df.columns
@@ -416,10 +469,10 @@ def main():
     if args.type == 'full':
         # 完整技术分析数据
         df_full = load_full_analysis_data(args.input)
-        plot_professional_kline(df_full, args.code, args.output)
+        plot_professional_kline(df_full, args.code, args.output, stock_names)
     else:
         # 简单K线数据
-        plot_simple_kline(args.input, args.code, args.output)
+        plot_simple_kline(args.input, args.code, args.output, stock_names)
 
     print(f"\n绘图完成！")
     print(f"输出文件: {args.output}")
