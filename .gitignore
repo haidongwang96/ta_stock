@@ -1,0 +1,13 @@
+# Ignore CSV files
+*.csv
+
+# Ignore text files
+*.txt
+
+# Ignore JSON files
+*.json
+
+# Pyenv
+.python-version
+.pyenv/
+*.png
