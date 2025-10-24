@@ -402,7 +402,207 @@ python technical_analysis.py --code 000001.SZ --start 20230101 --end 20241231
 
 ---
 
-## 十二、扩展建议
+## 十二、K线图绘制工具使用指南
+
+### 工具说明
+
+`plot_kline.py` 是一个专业K线图绘制工具，采用仿交易软件风格设计（黑色背景），可以将技术分析结果可视化为专业的K线图表。
+
+### 功能特性
+
+- **专业交易软件风格**：黑色背景，红涨绿跌配色方案
+- **多窗口布局**：
+  - 主图：K线 + 均线（MA5, MA10, MA20, MA60）
+  - 副图1：成交量柱状图 + 成交量均线
+  - 副图2：MFI资金流量指标（含超买超卖标记）
+  - 副图3：OBV能量潮指标（含趋势线）
+- **K线形态标注**：自动统计并显示锤子线、大阳线、大阴线等形态
+- **交易信号标注**：在K线图上标记买入(B)和卖出(S)信号
+
+### 基本用法
+
+#### 1. 绘制完整技术分析结果（推荐）
+
+```bash
+# 从技术分析生成的CSV文件绘制K线图
+python plot_kline.py --input technical_analysis_results/technical_analysis_000001.SZ_20241224.csv
+```
+
+#### 2. 绘制简单K线数据
+
+```bash
+# 从仅包含OHLCV数据的CSV文件绘制（会自动计算均线）
+python plot_kline.py --input kline_data.csv --code 000001.SZ
+```
+
+### 完整参数说明
+
+```bash
+python plot_kline.py \
+  --input technical_analysis_000001.SZ_20241224.csv \
+  --code 000001.SZ \
+  --output my_chart.png \
+  --type full
+```
+
+### 参数详解
+
+| 参数 | 必需 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--input` | 是 | 输入文件路径（CSV格式） | 无 |
+| `--code` | 否 | 股票代码，用于图表标题 | 从文件名自动提取 |
+| `--output` | 否 | 输出图片文件路径 | `technical_analysis_results/{文件名}_professional.png` |
+| `--type` | 否 | 数据类型：full/simple/auto | auto（自动检测） |
+
+### 数据类型说明
+
+- **full模式**：输入文件包含完整的技术指标（MFI、OBV等）
+  - 适用于 `technical_analysis.py` 生成的CSV文件
+  - 会绘制所有技术指标图表
+
+- **simple模式**：输入文件仅包含基础K线数据（OHLCV）
+  - 适用于简单的K线数据文件
+  - 会自动计算均线，但不显示MFI、OBV等指标
+
+- **auto模式**（默认）：自动检测输入文件类型
+  - 根据是否包含MFI等字段自动判断
+
+### 输入文件格式要求
+
+#### Full模式（完整技术分析数据）
+必需字段：
+```
+trade_date, Open, High, Low, Close, Volume, MFI, OBV, OBV_MA
+```
+
+可选字段（用于形态标注和信号标记）：
+```
+is_hammer, is_big_bullish, is_big_bearish, signal, signal_strength
+```
+
+#### Simple模式（基础K线数据）
+必需字段：
+```
+trade_date, Open, High, Low, Close, Volume
+```
+
+或中文字段名：
+```
+日期, 开盘价, 最高价, 最低价, 收盘价, 成交量
+```
+
+### 使用示例
+
+#### 例1: 分析并绘制K线图（完整流程）
+
+```bash
+# 步骤1：运行技术分析
+python technical_analysis.py --code 000001.SZ --days 60
+
+# 步骤2：绘制K线图
+python plot_kline.py --input technical_analysis_results/technical_analysis_000001.SZ_*.csv
+```
+
+#### 例2: 指定输出路径
+
+```bash
+python plot_kline.py \
+  --input technical_analysis_results/technical_analysis_000001.SZ_20241224.csv \
+  --output charts/平安银行_专业K线图.png
+```
+
+#### 例3: 批量绘制多只股票的K线图
+
+```bash
+# 创建批处理脚本
+for file in technical_analysis_results/technical_analysis_*.csv; do
+  python plot_kline.py --input "$file"
+done
+```
+
+### 输出文件说明
+
+- **默认输出位置**: `technical_analysis_results/` 目录
+- **文件命名**: `{输入文件名}_professional.png`
+- **图片格式**: PNG格式，分辨率150 DPI
+- **图片尺寸**: 18 x 12 英寸（适合高清显示）
+
+### 图表解读指南
+
+#### 主图（K线+均线）
+- **红色K线**: 上涨（收盘价 ≥ 开盘价）
+- **绿色K线**: 下跌（收盘价 < 开盘价）
+- **紫色线**: MA5（5日均线）
+- **黄色线**: MA10（10日均线）
+- **白色线**: MA20（20日均线）
+- **青色线**: MA60（60日均线）
+
+#### 成交量图
+- **红色柱**: 上涨日成交量
+- **绿色柱**: 下跌日成交量
+- **紫色线**: 5日成交量均线
+- **黄色线**: 10日成交量均线
+
+#### MFI指标图
+- **橙色线**: MFI指标值
+- **红色区域**: 超买区（MFI > 80）
+- **绿色区域**: 超卖区（MFI < 20）
+- **文字标注**: 显示最新MFI值及状态
+
+#### OBV指标图
+- **蓝色实线**: OBV指标值
+- **白色虚线**: OBV 20日均线
+- **文字标注**: 显示OBV趋势方向（上升/下降）
+
+#### 信号标注
+- **红色向上箭头+B**: 买入信号（信号强度 ≥ 2）
+- **绿色向下箭头+S**: 卖出信号（信号强度 ≤ -2）
+
+### 配色方案（仿交易软件）
+
+```python
+涨-红色: #FF4444
+跌-绿色: #00CC00
+MA5-紫色: #FF00FF
+MA10-黄色: #FFFF00
+MA20-白色: #FFFFFF
+MA60-青色: #00FFFF
+MFI-橙色: #FFA500
+OBV-蓝色: #4169E1
+背景-黑色: #000000
+网格-深灰: #333333
+文字-浅灰: #CCCCCC
+```
+
+### 注意事项
+
+1. **数据完整性**: 确保输入CSV文件包含所需的字段
+2. **日期格式**: trade_date字段应为YYYYMMDD格式（如20241224）
+3. **中文字体**: 程序会自动尝试使用中文字体（WenQuanYi Zen Hei, SimHei）
+4. **文件路径**: 支持相对路径和绝对路径
+5. **数据量**: 建议绘制60-120天的数据以获得最佳显示效果
+
+### 常见问题
+
+**Q1: 图表上没有显示MFI和OBV？**
+- 确认输入文件是否为完整的技术分析数据（包含MFI、OBV字段）
+- 或手动指定 `--type full`
+
+**Q2: 中文显示为方框？**
+- 系统缺少中文字体，请安装：
+  ```bash
+  sudo apt-get install fonts-wqy-zenhei  # Ubuntu/Debian
+  ```
+
+**Q3: 如何调整图表尺寸？**
+- 修改 `plot_kline.py:64` 中的 `figsize` 参数
+
+**Q4: 如何更改配色方案？**
+- 修改 `plot_kline.py:24-36` 中的 `COLORS` 字典
+
+---
+
+## 十三、扩展建议
 
 可以进一步增强的功能：
 
@@ -414,7 +614,7 @@ python technical_analysis.py --code 000001.SZ --start 20230101 --end 20241231
 
 ---
 
-## 十三、技术支持
+## 十四、技术支持
 
 相关文档：
 - 快速开始指南: `QUICKSTART.md`

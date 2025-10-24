@@ -418,13 +418,50 @@ class TeeOutput:
 
 def main():
     parser = argparse.ArgumentParser(description='股票技术指标分析工具')
-    parser.add_argument('--code', type=str, required=True, help='股票代码，如 000001.SZ')
+    parser.add_argument('--code', type=str, help='股票代码，如 000001.SZ 或 000001.SZ#平安银行')
     parser.add_argument('--start', type=str, help='开始日期 YYYYMMDD，默认60天前')
     parser.add_argument('--end', type=str, help='结束日期 YYYYMMDD，默认今天')
     parser.add_argument('--days', type=int, default=10, help='显示最近N天的分析，默认10天')
     parser.add_argument('--output', type=str, help='保存结果到CSV文件')
+    parser.add_argument('--pool', type=str, help='从股票池文件读取第一个股票代码进行分析')
 
     args = parser.parse_args()
+
+    # 检查是否提供了股票代码或股票池文件
+    if not args.code and not args.pool:
+        logger.error("请提供股票代码 (--code) 或股票池文件 (--pool)")
+        parser.print_help()
+        sys.exit(1)
+
+    # 处理股票池文件
+    if args.pool and not args.code:
+        if os.path.exists(args.pool):
+            with open(args.pool, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    # 跳过空行和注释行
+                    if not line or line.startswith('#'):
+                        continue
+                    # 去除行内注释并获取股票代码
+                    if '#' in line:
+                        code = line.split('#')[0].strip()
+                    else:
+                        code = line.strip()
+                    if code:
+                        args.code = code
+                        logger.info(f"从股票池文件读取股票代码: {args.code}")
+                        break
+
+            if not args.code:
+                logger.error("股票池文件中没有有效的股票代码")
+                sys.exit(1)
+        else:
+            logger.error(f"股票池文件 {args.pool} 不存在")
+            sys.exit(1)
+
+    # 处理带注释的股票代码
+    if args.code and '#' in args.code:
+        args.code = args.code.split('#')[0].strip()
 
     # 处理日期
     if not args.end:
@@ -434,7 +471,7 @@ def main():
         args.start = start_dt.strftime('%Y%m%d')
 
     # 设置输出重定向到文件
-    log_filename = os.path.join(OUTPUT_DIR, f'technical_analysis_{args.code}_{args.end}.txt')
+    log_filename = os.path.join(OUTPUT_DIR, f'technical_analysis_{args.code}.txt')
     tee = TeeOutput(log_filename)
     sys.stdout = tee
 
@@ -465,12 +502,12 @@ def main():
             if args.output:
                 csv_output = os.path.join(OUTPUT_DIR, args.output)
             else:
-                csv_output = os.path.join(OUTPUT_DIR, f'technical_analysis_{args.code}_{args.end}.csv')
+                csv_output = os.path.join(OUTPUT_DIR, f'technical_analysis_{args.code}.csv')
 
             analyzer.save_to_csv(df, csv_output)
 
             # 保存K线基础数据（用于绘图）
-            kline_output = os.path.join(OUTPUT_DIR, f'kline_data_{args.code}_{args.end}.csv')
+            kline_output = os.path.join(OUTPUT_DIR, f'kline_data_{args.code}.csv')
             analyzer.save_kline_data(df, kline_output)
 
             print(f"\n所有结果已保存到文件夹: {OUTPUT_DIR}")
