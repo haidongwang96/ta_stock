@@ -33,8 +33,20 @@ class TechnicalAnalyzer:
         """
         初始化
         """
-        # Tushare token
-        ts_token = "c105f106ea6ac80b4208c5f4bdc3d6630e47efbf27d821739ca4441d"
+        # 从 token.txt 读取 Tushare token
+        token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
+        try:
+            with open(token_file, 'r', encoding='utf-8') as f:
+                ts_token = f.read().strip()
+            if not ts_token:
+                raise ValueError("token.txt 文件为空")
+        except FileNotFoundError:
+            logger.error(f"未找到 token.txt 文件，请在 {token_file} 中添加您的 tushare token")
+            raise
+        except Exception as e:
+            logger.error(f"读取 token.txt 文件失败: {e}")
+            raise
+
         ts.set_token(ts_token)
         self.pro = ts.pro_api()
 
