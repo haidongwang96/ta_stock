@@ -16,6 +16,15 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# 导入本地数据库查询模块
+try:
+    from database.query_helper import StockDataQuery
+    LOCAL_DB_AVAILABLE = True
+except ImportError:
+    LOCAL_DB_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("本地数据库模块未安装，将使用在线Tushare数据")
+
 # 创建输出文件夹
 OUTPUT_DIR = 'batch_analysis_results'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -31,12 +40,38 @@ logger = logging.getLogger(__name__)
 class BatchTechnicalAnalyzer:
     """批量技术分析器"""
 
-    def __init__(self):
-        """初始化"""
-        # Tushare token
-        ts_token = "c105f106ea6ac80b4208c5f4bdc3d6630e47efbf27d821739ca4441d"
-        ts.set_token(ts_token)
-        self.pro = ts.pro_api()
+    def __init__(self, use_local_db=False):
+        """
+        初始化
+
+        Args:
+            use_local_db: 是否使用本地数据库，默认False（使用在线Tushare）
+        """
+        self.use_local_db = use_local_db and LOCAL_DB_AVAILABLE
+        self.local_query = None
+
+        if self.use_local_db:
+            # 使用本地数据库
+            self.local_query = StockDataQuery()
+            logger.info("使用本地数据库作为数据源")
+        else:
+            # 使用在线Tushare，从token.txt读取token
+            token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
+            try:
+                with open(token_file, 'r', encoding='utf-8') as f:
+                    ts_token = f.read().strip()
+                if not ts_token:
+                    raise ValueError("token.txt 文件为空")
+            except FileNotFoundError:
+                logger.error(f"未找到 token.txt 文件，请在 {token_file} 中添加您的 tushare token")
+                raise
+            except Exception as e:
+                logger.error(f"读取 token.txt 文件失败: {e}")
+                raise
+
+            ts.set_token(ts_token)
+            self.pro = ts.pro_api()
+            logger.info("使用在线Tushare作为数据源")
 
         # 存储所有股票的分析结果
         self.all_results = []
@@ -100,10 +135,40 @@ class BatchTechnicalAnalyzer:
         :return: 包含所有股票数据的字典
         """
         all_data = {}
-        batch_size = 50  # 每批次处理50只股票（tushare限制）
 
         logger.info(f"开始批量获取 {len(stock_codes)} 只股票的数据")
         logger.info(f"日期范围: {start_date} 到 {end_date}")
+
+        # 使用本地数据库
+        if self.use_local_db:
+            for i, code in enumerate(stock_codes, 1):
+                try:
+                    df = self.local_query.daily(code, start_date, end_date)
+                    if df is not None and not df.empty:
+                        # 按日期升序排列
+                        df = df.sort_values('trade_date').reset_index(drop=True)
+
+                        # 重命名列
+                        df = df.rename(columns={
+                            'open': 'Open',
+                            'high': 'High',
+                            'low': 'Low',
+                            'close': 'Close',
+                            'vol': 'Volume'
+                        })
+
+                        all_data[code] = df
+                        logger.info(f"  [{i}/{len(stock_codes)}] {self.format_stock_code(code)}: 从本地数据库获取到 {len(df)} 条数据")
+                    else:
+                        logger.warning(f"  [{i}/{len(stock_codes)}] {self.format_stock_code(code)}: 本地数据库无数据")
+                except Exception as e:
+                    logger.error(f"  [{i}/{len(stock_codes)}] {self.format_stock_code(code)}: 获取失败 - {e}")
+
+            logger.info(f"从本地数据库成功获取 {len(all_data)} 只股票的数据")
+            return all_data
+
+        # 使用在线Tushare（原有逻辑）
+        batch_size = 50  # 每批次处理50只股票（tushare限制）
 
         # 分批处理股票
         for i in range(0, len(stock_codes), batch_size):
@@ -512,6 +577,7 @@ def main():
                        choices=['score', 'mfi', 'pct_5d', 'pct_10d', 'volume_ratio'],
                        help='排序依据，默认按综合得分排序')
     parser.add_argument('--create-sample', action='store_true', help='创建示例股票池文件')
+    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 
@@ -528,7 +594,7 @@ def main():
         args.start = start_dt.strftime('%Y%m%d')
 
     # 创建分析器
-    analyzer = BatchTechnicalAnalyzer()
+    analyzer = BatchTechnicalAnalyzer(use_local_db=args.use_local_db)
 
     # 读取股票池
     stock_codes = analyzer.read_stock_pool(args.pool)

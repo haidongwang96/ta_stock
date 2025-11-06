@@ -20,6 +20,13 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+# 导入本地数据库查询模块
+try:
+    from database.query_helper import StockDataQuery
+    LOCAL_DB_AVAILABLE = True
+except ImportError:
+    LOCAL_DB_AVAILABLE = False
+
 # ==================== 全局配置 ====================
 
 # 输出目录
@@ -47,27 +54,42 @@ class StockScoringAnalyzer:
     整合 advanced_technical_analysis.py 的完整打分系统
     """
 
-    def __init__(self, ts_token=None):
-        """初始化分析器"""
-        # 读取 Tushare token
-        if ts_token is None:
-            token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
-            try:
-                with open(token_file, 'r', encoding='utf-8') as f:
-                    ts_token = f.read().strip()
-                if not ts_token:
-                    raise ValueError("token.txt 文件为空")
-            except FileNotFoundError:
-                logger.error(f"找不到 token.txt 文件: {token_file}")
-                logger.error("请在脚本目录下创建 token.txt 文件并填入您的 tushare token")
-                sys.exit(1)
-            except Exception as e:
-                logger.error(f"读取 token 文件失败: {e}")
-                sys.exit(1)
+    def __init__(self, ts_token=None, use_local_db=False):
+        """
+        初始化分析器
 
-        # 初始化 Tushare
-        ts.set_token(ts_token)
-        self.pro = ts.pro_api()
+        Args:
+            ts_token: Tushare token，如果为None则从token.txt读取
+            use_local_db: 是否使用本地数据库，默认False（使用在线Tushare）
+        """
+        self.use_local_db = use_local_db and LOCAL_DB_AVAILABLE
+        self.local_query = None
+
+        if self.use_local_db:
+            # 使用本地数据库
+            self.local_query = StockDataQuery()
+            logger.info("使用本地数据库作为数据源")
+        else:
+            # 读取 Tushare token
+            if ts_token is None:
+                token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
+                try:
+                    with open(token_file, 'r', encoding='utf-8') as f:
+                        ts_token = f.read().strip()
+                    if not ts_token:
+                        raise ValueError("token.txt 文件为空")
+                except FileNotFoundError:
+                    logger.error(f"找不到 token.txt 文件: {token_file}")
+                    logger.error("请在脚本目录下创建 token.txt 文件并填入您的 tushare token")
+                    sys.exit(1)
+                except Exception as e:
+                    logger.error(f"读取 token 文件失败: {e}")
+                    sys.exit(1)
+
+            # 初始化 Tushare
+            ts.set_token(ts_token)
+            self.pro = ts.pro_api()
+            logger.info("使用在线Tushare作为数据源")
 
         # 技术指标参数配置
         self.params = {
@@ -90,11 +112,16 @@ class StockScoringAnalyzer:
     def fetch_data(self, stock_code, start_date, end_date):
         """获取股票数据"""
         try:
-            df = self.pro.daily(
-                ts_code=stock_code,
-                start_date=start_date,
-                end_date=end_date
-            )
+            if self.use_local_db:
+                # 从本地数据库获取数据
+                df = self.local_query.daily(stock_code, start_date, end_date)
+            else:
+                # 从在线Tushare获取数据
+                df = self.pro.daily(
+                    ts_code=stock_code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
 
             if df is None or df.empty:
                 logger.warning(f"未获取到 {stock_code} 的数据")
@@ -691,11 +718,11 @@ def analyze_single_stock(args):
     """
     分析单只股票的多进程工作函数
     """
-    stock_code, stock_name, start_date, end_date = args
+    stock_code, stock_name, start_date, end_date, use_local_db = args
 
     try:
         # 创建分析器实例
-        analyzer = StockScoringAnalyzer()
+        analyzer = StockScoringAnalyzer(use_local_db=use_local_db)
 
         # 获取数据
         df = analyzer.fetch_data(stock_code, start_date, end_date)
@@ -1044,6 +1071,7 @@ def main():
     parser.add_argument('--days', type=int, default=60, help='获取历史数据天数，默认60天')
     parser.add_argument('--workers', type=int, default=4, help='并发进程数，默认4')
     parser.add_argument('--output_dir', type=str, default=None, help='输出目录，默认 daily_scoring_results')
+    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 
@@ -1065,9 +1093,10 @@ def main():
     logger.info(f"开始批量分析 {len(stocks)} 只股票")
     logger.info(f"日期范围: {start_date} 至 {end_date}")
     logger.info(f"并发进程数: {args.workers}")
+    logger.info(f"数据源: {'本地数据库' if args.use_local_db else '在线Tushare'}")
 
     # 准备任务参数
-    tasks = [(s['code'], s['name'], start_date, end_date) for s in stocks]
+    tasks = [(s['code'], s['name'], start_date, end_date, args.use_local_db) for s in stocks]
 
     # 多进程批量处理
     results = []

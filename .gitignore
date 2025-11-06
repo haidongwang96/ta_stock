@@ -11,3 +11,8 @@
 .python-version
 .pyenv/
 *.png
+
+.DS_Store
+.idea/
+
+**__pycache__**

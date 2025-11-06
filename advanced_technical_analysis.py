@@ -16,6 +16,13 @@ import os
 import sys
 import numpy as np
 
+# 导入本地数据库查询模块
+try:
+    from database.query_helper import StockDataQuery
+    LOCAL_DB_AVAILABLE = True
+except ImportError:
+    LOCAL_DB_AVAILABLE = False
+
 # 创建输出文件夹
 OUTPUT_DIR = 'advanced_analysis_results'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -49,24 +56,39 @@ class TeeOutput:
 class AdvancedTechnicalAnalyzer:
     """高级技术分析器"""
 
-    def __init__(self):
-        """初始化"""
-        # 从 token.txt 读取 Tushare token
-        token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
-        try:
-            with open(token_file, 'r', encoding='utf-8') as f:
-                ts_token = f.read().strip()
-            if not ts_token:
-                raise ValueError("token.txt 文件为空")
-        except FileNotFoundError:
-            logger.error(f"未找到 token.txt 文件，请在 {token_file} 中添加您的 tushare token")
-            raise
-        except Exception as e:
-            logger.error(f"读取 token.txt 文件失败: {e}")
-            raise
+    def __init__(self, use_local_db=False):
+        """
+        初始化
 
-        ts.set_token(ts_token)
-        self.pro = ts.pro_api()
+        Args:
+            use_local_db: 是否使用本地数据库，默认False（使用在线Tushare）
+        """
+        self.use_local_db = use_local_db and LOCAL_DB_AVAILABLE
+        self.local_query = None
+
+        if self.use_local_db:
+            # 使用本地数据库
+            self.local_query = StockDataQuery()
+            logger.info("使用本地数据库作为数据源")
+        else:
+            # 使用在线Tushare
+            # 从 token.txt 读取 Tushare token
+            token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
+            try:
+                with open(token_file, 'r', encoding='utf-8') as f:
+                    ts_token = f.read().strip()
+                if not ts_token:
+                    raise ValueError("token.txt 文件为空")
+            except FileNotFoundError:
+                logger.error(f"未找到 token.txt 文件，请在 {token_file} 中添加您的 tushare token")
+                raise
+            except Exception as e:
+                logger.error(f"读取 token.txt 文件失败: {e}")
+                raise
+
+            ts.set_token(ts_token)
+            self.pro = ts.pro_api()
+            logger.info("使用在线Tushare作为数据源")
 
         # 指标参数配置
         self.params = {
@@ -91,13 +113,18 @@ class AdvancedTechnicalAnalyzer:
         """
         logger.info(f"获取 {ts_code} 从 {start_date} 到 {end_date} 的数据")
 
-        df = self.pro.daily(
-            ts_code=ts_code,
-            start_date=start_date,
-            end_date=end_date
-        )
+        if self.use_local_db:
+            # 从本地数据库获取数据
+            df = self.local_query.daily(ts_code, start_date, end_date)
+        else:
+            # 从在线Tushare获取数据
+            df = self.pro.daily(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date
+            )
 
-        if df.empty:
+        if df is None or df.empty:
             logger.warning(f"未获取到 {ts_code} 的数据")
             return None
 
@@ -1385,6 +1412,7 @@ def main():
     parser.add_argument('--report_days', type=int, default=20, help='报告中显示最近N天的信号，默认20天')
     parser.add_argument('--pool', type=str, help='从股票池文件读取股票代码进行批量分析')
     parser.add_argument('--batch', action='store_true', help='批量分析模式，分析股票池中的所有股票')
+    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 
@@ -1436,7 +1464,7 @@ def main():
         args.start = start_dt.strftime('%Y%m%d')
 
     # 创建分析器
-    analyzer = AdvancedTechnicalAnalyzer()
+    analyzer = AdvancedTechnicalAnalyzer(use_local_db=args.use_local_db)
 
     # 批量分析或单个分析
     analysis_results = []
