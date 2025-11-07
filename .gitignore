@@ -3,6 +3,7 @@
 
 # Ignore text files
 *.txt
+*.dbs
 
 # Ignore JSON files
 *.json
@@ -14,5 +15,6 @@
 
 .DS_Store
 .idea/
+
 
 **__pycache__**
