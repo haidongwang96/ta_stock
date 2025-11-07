@@ -16,14 +16,20 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# ==================== 路径配置 ====================
+# 将项目根目录添加到 Python 路径，以便导入 database 模块
+# 这样无论从哪个目录运行脚本都能正常工作
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # 导入本地数据库查询模块
 try:
     from database.query_helper import StockDataQuery
     LOCAL_DB_AVAILABLE = True
 except ImportError:
     LOCAL_DB_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("本地数据库模块未安装，将使用在线Tushare数据")
 
 # 创建输出文件夹
 OUTPUT_DIR = 'batch_analysis_results'

@@ -1,0 +1,1 @@
+python3 scripts/single_stock_rolling_score.py --code 603986.SH  --name 兆易创新  --use-local-db

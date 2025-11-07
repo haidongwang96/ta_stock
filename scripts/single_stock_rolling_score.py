@@ -10,6 +10,25 @@
 3. 回测验证：验证打分系统的历史表现
 4. 监控单个股票：持续追踪关注股票的技术面变化
 
+重要说明：
+- 得分与股价对齐方式：第N天的得分对应第N+1天的涨跌幅
+- 这样能够评估打分系统对未来走势的预判能力
+- 例如：2024-01-15的得分 → 预测 2024-01-16的涨跌
+
+数据源选项：
+- 默认使用在线Tushare（需要token.txt文件）
+- 可选本地数据库：添加 --use-local-db 参数（需要配置database/query_helper.py）
+
+使用示例：
+1. 使用在线Tushare（默认）：
+   python single_stock_rolling_score.py --code 000001.SZ --name 平安银行
+
+2. 使用本地数据库（推荐，速度更快）：
+   python single_stock_rolling_score.py --code 000001.SZ --name 平安银行 --use-local-db
+
+3. 自定义窗口参数：
+   python single_stock_rolling_score.py --code 000001.SZ --use-local-db --num-windows 60 --indicator-window 120
+
 输出：
 1. CSV文件：每日得分详细数据
 2. 文本报告：趋势分析、买卖建议
@@ -28,6 +47,14 @@ from datetime import datetime, timedelta
 import warnings
 
 warnings.filterwarnings('ignore')
+
+# ==================== 路径配置 ====================
+# 将项目根目录添加到 Python 路径，以便导入 database 模块
+# 这样无论从哪个目录运行脚本都能正常工作
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # 导入打分分析器
 from daily_stock_scoring import StockScoringAnalyzer, get_score_level
@@ -82,13 +109,25 @@ class RollingScoreAnalyzer:
         """
         self.stock_code = stock_code
         self.stock_name = stock_name or stock_code
+
+        # 检查本地数据库可用性
+        if use_local_db and not LOCAL_DB_AVAILABLE:
+            logger.warning("⚠️  本地数据库模块不可用！自动回退到在线Tushare")
+            logger.warning("   请确保已正确配置 database/query_helper.py")
+            use_local_db = False
+
         self.use_local_db = use_local_db
 
         # 创建基础分析器
         self.analyzer = StockScoringAnalyzer(use_local_db=use_local_db)
 
         logger.info(f"初始化滚动窗口分析器: {self.stock_code} ({self.stock_name})")
-        logger.info(f"数据源: {'本地数据库' if use_local_db else '在线Tushare'}")
+
+        # 显示实际使用的数据源
+        if self.analyzer.use_local_db:
+            logger.info(f"✓ 数据源: 本地数据库")
+        else:
+            logger.info(f"✓ 数据源: 在线Tushare")
 
     def calculate_rolling_scores(self, end_date=None, num_windows=30, indicator_window=60):
         """
@@ -171,11 +210,27 @@ class RollingScoreAnalyzer:
 
             # 获取窗口最后一天（最新一天）的得分
             last_row = window_data.iloc[-1]
+            current_date = last_row['trade_date']
+            current_close = last_row['Close']
+
+            # 计算未来一天的涨跌幅（预判对齐）
+            # end_idx 指向的是下一天的数据（如果存在）
+            if end_idx < len(df_full):
+                # 有未来数据：用下一天相对于今天的涨跌幅
+                next_close = df_full.iloc[end_idx]['Close']
+                change_pct = ((next_close - current_close) / current_close) * 100
+                next_date = df_full.iloc[end_idx]['trade_date']
+            else:
+                # 最新一天没有未来数据
+                change_pct = None
+                next_date = None
 
             # 构建结果记录
             result = {
-                'date': last_row['trade_date'],
-                'close': last_row['Close'],
+                'date': current_date,  # 得分对应的日期（第n天）
+                'close': current_close,  # 第n天收盘价
+                'next_date': next_date,  # 预测的目标日期（第n+1天）
+                'change_pct': change_pct,  # 第n+1天相对于第n天的涨跌幅
                 'total_score': last_row['Total_Score'],
                 'trend_score': last_row['Trend_Score'],
                 'momentum_score': last_row['Momentum_Score'],
@@ -185,13 +240,6 @@ class RollingScoreAnalyzer:
                 'score_details': last_row['Score_Details'],
                 'score_level': get_score_level(last_row['Total_Score']),
             }
-
-            # 添加价格变化（如果有前一天数据）
-            if len(window_data) >= 2:
-                prev_close = window_data.iloc[-2]['Close']
-                result['change_pct'] = ((last_row['Close'] - prev_close) / prev_close) * 100
-            else:
-                result['change_pct'] = 0.0
 
             # 添加关键指标
             for col in ['RSI', 'MFI', 'K', 'D', 'J', 'CCI', 'ATR', 'Volume_Ratio']:
@@ -321,7 +369,7 @@ def save_csv(df, stock_code, output_dir=OUTPUT_DIR):
 
     # 选择要保存的列
     columns_to_save = [
-        'date', 'close', 'change_pct',
+        'date', 'close', 'next_date', 'change_pct',
         'total_score', 'trend_score', 'momentum_score',
         'volatility_score', 'volume_score', 'pattern_score',
         'score_level', 'signals', 'score_details',
@@ -335,9 +383,10 @@ def save_csv(df, stock_code, output_dir=OUTPUT_DIR):
 
     # 重命名列为中文（可选）
     rename_map = {
-        'date': '日期',
-        'close': '收盘价',
-        'change_pct': '涨跌幅%',
+        'date': '得分日期',
+        'close': '当日收盘价',
+        'next_date': '预测日期',
+        'change_pct': '次日涨跌幅%',
         'total_score': '总分',
         'trend_score': '趋势分',
         'momentum_score': '动量分',
@@ -398,6 +447,16 @@ def generate_text_report(df, stock_code, stock_name, output_dir=OUTPUT_DIR):
         f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"分析周期: {df['date'].min()} 至 {df['date'].max()}\n")
         f.write(f"分析天数: {len(df)} 个交易日\n\n")
+
+        # 重要说明
+        f.write("-" * 100 + "\n")
+        f.write("【重要说明】\n")
+        f.write("-" * 100 + "\n")
+        f.write("本报告采用预判性对齐方式：\n")
+        f.write("- 第N天的得分 对应 第N+1天的涨跌幅\n")
+        f.write("- 目的：评估打分系统对未来走势的预判能力\n")
+        f.write("- 例如：2024-01-15的得分用于预测2024-01-16的涨跌\n")
+        f.write("- 因此最新一天的得分没有次日涨跌幅数据（显示为N/A）\n\n")
 
         # 得分统计
         f.write("-" * 100 + "\n")
@@ -466,8 +525,9 @@ def generate_text_report(df, stock_code, stock_name, output_dir=OUTPUT_DIR):
 
             for idx, row in df_with_signals.iterrows():
                 f.write(f"{row['date']}: {row['signals']}\n")
+                change_str = f"{row['change_pct']:+.2f}%" if pd.notna(row['change_pct']) else "N/A"
                 f.write(f"  总分: {row['total_score']:+.0f} | 收盘价: {row['close']:.2f} | "
-                       f"涨跌幅: {row['change_pct']:+.2f}%\n")
+                       f"次日涨跌幅: {change_str}\n")
                 f.write(f"  得分详情: {row['score_details'][:100]}...\n\n")
         else:
             f.write("未识别到关键信号\n\n")
@@ -503,13 +563,14 @@ def generate_text_report(df, stock_code, stock_name, output_dir=OUTPUT_DIR):
         f.write("-" * 100 + "\n")
         f.write("【最近10个交易日得分明细】\n")
         f.write("-" * 100 + "\n")
-        f.write(f"{'日期':<12}{'收盘价':<10}{'涨跌幅':<10}{'总分':<8}{'趋势':<6}{'动量':<6}"
+        f.write(f"{'日期':<12}{'收盘价':<10}{'次日涨跌':<10}{'总分':<8}{'趋势':<6}{'动量':<6}"
                f"{'波动':<6}{'成交量':<8}{'形态':<6}{'等级':<12}{'信号'}\n")
         f.write("-" * 100 + "\n")
 
         for idx, row in df.head(10).iterrows():
             date_str = str(row['date'])[:10]  # 只取日期部分 YYYY-MM-DD
-            f.write(f"{date_str:<12}{row['close']:>8.2f}  {row['change_pct']:>+7.2f}%  "
+            change_str = f"{row['change_pct']:>+7.2f}%" if pd.notna(row['change_pct']) else "    N/A   "
+            f.write(f"{date_str:<12}{row['close']:>8.2f}  {change_str}  "
                    f"{row['total_score']:>+5.0f}  {row['trend_score']:>+4.0f}  {row['momentum_score']:>+4.0f}  "
                    f"{row['volatility_score']:>+4.0f}  {row['volume_score']:>+6.0f}  {row['pattern_score']:>+4.0f}  "
                    f"{row['score_level']:<12}{row['signals']}\n")
@@ -546,43 +607,99 @@ def generate_charts(df, stock_code, stock_name, output_dir=OUTPUT_DIR):
     df_plot = df.sort_values('date', ascending=True).copy()
     df_plot['date'] = pd.to_datetime(df_plot['date'], format='%Y%m%d')
 
+    # 计算累计涨跌幅（相对于第一天）
+    first_close = df_plot['close'].iloc[0]
+    df_plot['cumulative_return'] = ((df_plot['close'] - first_close) / first_close) * 100
+
+    # 计算当日涨跌幅（相对于前一天）
+    df_plot['daily_return'] = df_plot['close'].pct_change() * 100
+
     # 创建图表（2行2列）
     fig, axes = plt.subplots(2, 2, figsize=(20, 12))
     fig.suptitle(f'{stock_name} ({stock_code}) - 滚动窗口打分分析',
                  fontsize=16, fontweight='bold', y=0.995)
 
-    # ========== 子图1: 总分趋势 + 价格走势（双y轴）==========
+    # ========== 子图1: 总分趋势 + 当日涨跌幅（双y轴）==========
     ax1 = axes[0, 0]
     ax1_twin = ax1.twinx()
 
+    # 创建均匀分布的x轴索引（去掉非交易日）
+    x_indices = np.arange(len(df_plot))
+
     # 绘制总分
-    line1 = ax1.plot(df_plot['date'], df_plot['total_score'],
+    line1 = ax1.plot(x_indices, df_plot['total_score'],
                      color='#2E86AB', linewidth=2, marker='o', markersize=4,
                      label='总分')
     ax1.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
     ax1.axhline(y=5, color='green', linestyle=':', linewidth=1, alpha=0.5, label='看多线(+5)')
     ax1.axhline(y=-5, color='red', linestyle=':', linewidth=1, alpha=0.5, label='看空线(-5)')
-    ax1.fill_between(df_plot['date'], 0, df_plot['total_score'],
+    ax1.fill_between(x_indices, 0, df_plot['total_score'],
                      where=(df_plot['total_score'] >= 0), alpha=0.2, color='green', label='正分区域')
-    ax1.fill_between(df_plot['date'], 0, df_plot['total_score'],
+    ax1.fill_between(x_indices, 0, df_plot['total_score'],
                      where=(df_plot['total_score'] < 0), alpha=0.2, color='red', label='负分区域')
 
-    # 绘制价格
-    line2 = ax1_twin.plot(df_plot['date'], df_plot['close'],
-                          color='#E63946', linewidth=2, alpha=0.7,
-                          label='收盘价')
+    # 绘制当日涨跌幅（柱状图）- 涨红跌绿
+    bar_colors = ['#FF3333' if x >= 0 else '#00CC00' for x in df_plot['daily_return']]
+    line2 = ax1_twin.bar(x_indices, df_plot['daily_return'],
+                          color=bar_colors, alpha=0.6, width=0.8,
+                          label='当日涨跌幅')
+
+    # 在柱子上标注涨跌幅数值
+    for i, (idx, val) in enumerate(zip(x_indices, df_plot['daily_return'])):
+        if pd.notna(val):  # 只标注有效值
+            # 根据正负值决定标注位置
+            if val >= 0:
+                va = 'bottom'
+                y_pos = val
+            else:
+                va = 'top'
+                y_pos = val
+            ax1_twin.text(idx, y_pos, f'{val:.1f}%',
+                         ha='center', va=va, fontsize=7,
+                         color='black', rotation=0)
+
+    # 添加0%基准线
+    ax1_twin.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # 对齐两个y轴的0点，使刻度一致
+    # 计算两个数据的最大绝对值
+    score_max = max(abs(df_plot['total_score'].min()), abs(df_plot['total_score'].max()))
+    return_max = max(abs(df_plot['daily_return'].min()), abs(df_plot['daily_return'].max()))
+    # 使用较大的范围，确保所有数据都能显示（增加更多边距以容纳标注）
+    y_max = max(score_max, return_max) * 1.3  # 增加30%的边距
+    # 设置两个y轴使用相同的范围
+    ax1.set_ylim(-y_max, y_max)
+    ax1_twin.set_ylim(-y_max, y_max)
+
+    # 在总分点位下方10%处标注得分
+    y_range = y_max * 2  # 总的y轴范围
+    offset = y_range * 0.10  # 10%的偏移量
+    for idx, score in zip(x_indices, df_plot['total_score']):
+        # 标注位置在得分点下方10%
+        y_pos = score - offset
+        ax1.text(idx, y_pos, f'{score:+.0f}',
+                ha='center', va='top', fontsize=7,
+                color='#2E86AB', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='#2E86AB', alpha=0.7))
+
+    # 设置x轴刻度标签为日期（每隔几个显示）
+    step = max(1, len(df_plot) // 15)  # 显示约15个日期标签
+    xtick_positions = x_indices[::step]
+    xtick_labels = [d.strftime('%m-%d') for d in df_plot['date'].iloc[::step]]
+    ax1.set_xticks(xtick_positions)
+    ax1.set_xticklabels(xtick_labels, rotation=45, ha='right', fontsize=9)
 
     ax1.set_xlabel('日期', fontsize=11)
     ax1.set_ylabel('总分', fontsize=11, color='#2E86AB')
-    ax1_twin.set_ylabel('收盘价 (元)', fontsize=11, color='#E63946')
+    ax1_twin.set_ylabel('当日涨跌幅 (%)', fontsize=11, color='#E63946')
     ax1.tick_params(axis='y', labelcolor='#2E86AB')
     ax1_twin.tick_params(axis='y', labelcolor='#E63946')
-    ax1.set_title('总分趋势 vs 价格走势', fontsize=12, fontweight='bold')
+    ax1.set_title('总分趋势 vs 当日涨跌幅', fontsize=12, fontweight='bold')
     ax1.grid(True, alpha=0.3)
 
     # 合并图例
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
+    lines = line1 + [line2]
+    labels = [line1[0].get_label(), '当日涨跌幅']
     ax1.legend(lines, labels, loc='upper left', fontsize=9)
 
     # ========== 子图2: 5个分项得分堆叠面积图 ==========
@@ -607,69 +724,170 @@ def generate_charts(df, stock_code, stock_name, output_dir=OUTPUT_DIR):
     ax2.grid(True, alpha=0.3)
     ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
 
-    # ========== 子图3: 得分 vs 涨跌幅散点图 ==========
+    # ========== 子图3: 得分 vs 次日涨跌幅（预判性分析）==========
     ax3 = axes[1, 0]
+    ax3_twin = ax3.twinx()
 
-    # 过滤掉第一个数据点（没有涨跌幅）
-    df_scatter = df_plot[df_plot['change_pct'].notna()].copy()
+    # 准备预判性对齐的数据：第n-1天的得分对应第n天的涨跌幅
+    # 即：昨天的得分预测今天的涨跌
+    df_predict = df_plot.copy()
+    # 将涨跌幅向前移动一位，使其对应前一天的得分
+    df_predict['next_day_return'] = df_predict['daily_return'].shift(-1)
 
-    # 根据得分正负设置颜色
-    colors_scatter = df_scatter['total_score'].apply(lambda x: '#06D6A0' if x >= 0 else '#EF476F')
+    # 过滤掉没有次日涨跌幅的数据（最后一天）
+    df_predict_valid = df_predict[df_predict['next_day_return'].notna()].copy()
+    x_indices_predict = np.arange(len(df_predict_valid))
 
-    scatter = ax3.scatter(df_scatter['total_score'], df_scatter['change_pct'],
-                         c=colors_scatter, s=50, alpha=0.6, edgecolors='black', linewidth=0.5)
-
-    # 添加趋势线
-    if len(df_scatter) > 2:
-        z = np.polyfit(df_scatter['total_score'], df_scatter['change_pct'], 1)
-        p = np.poly1d(z)
-        ax3.plot(df_scatter['total_score'], p(df_scatter['total_score']),
-                "r--", alpha=0.5, linewidth=2, label=f'趋势线 (斜率={z[0]:.3f})')
-
+    # 绘制总分
+    line1_predict = ax3.plot(x_indices_predict, df_predict_valid['total_score'],
+                             color='#2E86AB', linewidth=2, marker='o', markersize=4,
+                             label='总分')
     ax3.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax3.axvline(x=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax3.set_xlabel('总分', fontsize=11)
-    ax3.set_ylabel('涨跌幅 (%)', fontsize=11)
-    ax3.set_title('得分 vs 涨跌幅关系', fontsize=12, fontweight='bold')
+    ax3.axhline(y=5, color='green', linestyle=':', linewidth=1, alpha=0.5, label='看多线(+5)')
+    ax3.axhline(y=-5, color='red', linestyle=':', linewidth=1, alpha=0.5, label='看空线(-5)')
+    ax3.fill_between(x_indices_predict, 0, df_predict_valid['total_score'],
+                     where=(df_predict_valid['total_score'] >= 0), alpha=0.2, color='green', label='正分区域')
+    ax3.fill_between(x_indices_predict, 0, df_predict_valid['total_score'],
+                     where=(df_predict_valid['total_score'] < 0), alpha=0.2, color='red', label='负分区域')
+
+    # 绘制次日涨跌幅（柱状图）- 涨红跌绿
+    bar_colors_predict = ['#FF3333' if x >= 0 else '#00CC00' for x in df_predict_valid['next_day_return']]
+    line2_predict = ax3_twin.bar(x_indices_predict, df_predict_valid['next_day_return'],
+                                  color=bar_colors_predict, alpha=0.6, width=0.8,
+                                  label='次日涨跌幅')
+
+    # 在柱子上标注涨跌幅数值
+    for idx, val in zip(x_indices_predict, df_predict_valid['next_day_return']):
+        if pd.notna(val):
+            if val >= 0:
+                va = 'bottom'
+                y_pos = val
+            else:
+                va = 'top'
+                y_pos = val
+            ax3_twin.text(idx, y_pos, f'{val:.1f}%',
+                         ha='center', va=va, fontsize=7,
+                         color='black', rotation=0)
+
+    # 添加0%基准线
+    ax3_twin.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # 对齐两个y轴的0点
+    score_max_predict = max(abs(df_predict_valid['total_score'].min()), abs(df_predict_valid['total_score'].max()))
+    return_max_predict = max(abs(df_predict_valid['next_day_return'].min()), abs(df_predict_valid['next_day_return'].max()))
+    y_max_predict = max(score_max_predict, return_max_predict) * 1.3
+    ax3.set_ylim(-y_max_predict, y_max_predict)
+    ax3_twin.set_ylim(-y_max_predict, y_max_predict)
+
+    # 在总分点位下方10%处标注得分
+    y_range_predict = y_max_predict * 2  # 总的y轴范围
+    offset_predict = y_range_predict * 0.10  # 10%的偏移量
+    for idx, score in zip(x_indices_predict, df_predict_valid['total_score']):
+        # 标注位置在得分点下方10%
+        y_pos = score - offset_predict
+        ax3.text(idx, y_pos, f'{score:+.0f}',
+                ha='center', va='top', fontsize=7,
+                color='#2E86AB', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='#2E86AB', alpha=0.7))
+
+    # 设置x轴刻度标签为日期（每隔几个显示）
+    step_predict = max(1, len(df_predict_valid) // 15)  # 显示约15个日期标签
+    xtick_positions_predict = x_indices_predict[::step_predict]
+    xtick_labels_predict = [d.strftime('%m-%d') for d in df_predict_valid['date'].iloc[::step_predict]]
+    ax3.set_xticks(xtick_positions_predict)
+    ax3.set_xticklabels(xtick_labels_predict, rotation=45, ha='right', fontsize=9)
+
+    ax3.set_xlabel('日期', fontsize=11)
+    ax3.set_ylabel('总分', fontsize=11, color='#2E86AB')
+    ax3_twin.set_ylabel('次日涨跌幅 (%)', fontsize=11, color='#E63946')
+    ax3.tick_params(axis='y', labelcolor='#2E86AB')
+    ax3_twin.tick_params(axis='y', labelcolor='#E63946')
+    ax3.set_title('得分预判性分析（第N天得分 vs 第N+1天涨跌）', fontsize=12, fontweight='bold')
     ax3.grid(True, alpha=0.3)
-    ax3.legend(fontsize=9)
 
-    # 计算相关系数
-    if len(df_scatter) > 2:
-        corr = df_scatter[['total_score', 'change_pct']].corr().iloc[0, 1]
-        ax3.text(0.05, 0.95, f'相关系数: {corr:.3f}',
-                transform=ax3.transAxes, fontsize=10,
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    # 合并图例
+    lines_predict = line1_predict + [line2_predict]
+    labels_predict = [line1_predict[0].get_label(), '次日涨跌幅']
+    ax3.legend(lines_predict, labels_predict, loc='upper left', fontsize=9)
 
-    # ========== 子图4: 得分分布直方图 ==========
+    # ========== 子图4: 五个子得分 vs 次日涨跌幅（预判性分析）==========
     ax4 = axes[1, 1]
+    ax4_twin = ax4.twinx()
 
-    # 绘制直方图
-    n, bins, patches = ax4.hist(df_plot['total_score'], bins=20,
-                                edgecolor='black', linewidth=1.2, alpha=0.7)
+    # 准备预判性对齐的数据（与左下角相同的逻辑）
+    df_predict_sub = df_plot.copy()
+    df_predict_sub['next_day_return'] = df_predict_sub['daily_return'].shift(-1)
+    df_predict_sub_valid = df_predict_sub[df_predict_sub['next_day_return'].notna()].copy()
+    x_indices_sub = np.arange(len(df_predict_sub_valid))
 
-    # 根据得分区间设置颜色
-    for i, patch in enumerate(patches):
-        bin_center = (bins[i] + bins[i+1]) / 2
-        if bin_center >= 5:
-            patch.set_facecolor('#06D6A0')  # 绿色 - 看多
-        elif bin_center >= 0:
-            patch.set_facecolor('#90E0EF')  # 浅蓝 - 偏多
-        elif bin_center >= -5:
-            patch.set_facecolor('#FFB3C1')  # 浅红 - 偏空
-        else:
-            patch.set_facecolor('#EF476F')  # 红色 - 看空
+    # 绘制五个子得分折线图
+    score_types = [
+        ('trend_score', '趋势分', '#06D6A0'),
+        ('momentum_score', '动量分', '#118AB2'),
+        ('volatility_score', '波动分', '#073B4C'),
+        ('volume_score', '成交量分', '#FFD166'),
+        ('pattern_score', '形态分', '#EF476F')
+    ]
 
-    # 添加均值线
-    mean_score = df_plot['total_score'].mean()
-    ax4.axvline(x=mean_score, color='red', linestyle='--', linewidth=2,
-               label=f'均值 ({mean_score:+.2f})')
+    for score_col, score_label, color in score_types:
+        ax4.plot(x_indices_sub, df_predict_sub_valid[score_col],
+                color=color, linewidth=2, marker='o', markersize=3,
+                label=score_label, alpha=0.8)
 
-    ax4.set_xlabel('总分', fontsize=11)
-    ax4.set_ylabel('频数', fontsize=11)
-    ax4.set_title('得分分布', fontsize=12, fontweight='bold')
-    ax4.legend(fontsize=9)
-    ax4.grid(True, alpha=0.3, axis='y')
+    ax4.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    ax4.legend(loc='upper left', fontsize=9)
+
+    # 绘制次日涨跌幅（柱状图）- 涨红跌绿
+    bar_colors_sub = ['#FF3333' if x >= 0 else '#00CC00' for x in df_predict_sub_valid['next_day_return']]
+    line2_sub = ax4_twin.bar(x_indices_sub, df_predict_sub_valid['next_day_return'],
+                              color=bar_colors_sub, alpha=0.6, width=0.8,
+                              label='次日涨跌幅')
+
+    # 在柱子上标注涨跌幅数值
+    for idx, val in zip(x_indices_sub, df_predict_sub_valid['next_day_return']):
+        if pd.notna(val):
+            if val >= 0:
+                va = 'bottom'
+                y_pos = val
+            else:
+                va = 'top'
+                y_pos = val
+            ax4_twin.text(idx, y_pos, f'{val:.1f}%',
+                         ha='center', va=va, fontsize=7,
+                         color='black', rotation=0)
+
+    # 添加0%基准线
+    ax4_twin.axhline(y=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # 对齐两个y轴的0点
+    # 计算五个子得分的最大绝对值
+    score_max_sub = max([
+        abs(df_predict_sub_valid[col].min())
+        for col, _, _ in score_types
+    ] + [
+        abs(df_predict_sub_valid[col].max())
+        for col, _, _ in score_types
+    ])
+    return_max_sub = max(abs(df_predict_sub_valid['next_day_return'].min()),
+                         abs(df_predict_sub_valid['next_day_return'].max()))
+    y_max_sub = max(score_max_sub, return_max_sub) * 1.3
+    ax4.set_ylim(-y_max_sub, y_max_sub)
+    ax4_twin.set_ylim(-y_max_sub, y_max_sub)
+
+    # 设置x轴刻度标签为日期
+    step_sub = max(1, len(df_predict_sub_valid) // 15)
+    xtick_positions_sub = x_indices_sub[::step_sub]
+    xtick_labels_sub = [d.strftime('%m-%d') for d in df_predict_sub_valid['date'].iloc[::step_sub]]
+    ax4.set_xticks(xtick_positions_sub)
+    ax4.set_xticklabels(xtick_labels_sub, rotation=45, ha='right', fontsize=9)
+
+    ax4.set_xlabel('日期', fontsize=11)
+    ax4.set_ylabel('子得分', fontsize=11, color='black')
+    ax4_twin.set_ylabel('次日涨跌幅 (%)', fontsize=11, color='#E63946')
+    ax4.tick_params(axis='y', labelcolor='black')
+    ax4_twin.tick_params(axis='y', labelcolor='#E63946')
+    ax4.set_title('五个子得分 vs 次日涨跌幅（预判性分析）', fontsize=12, fontweight='bold')
+    ax4.grid(True, alpha=0.3)
 
     # 调整布局
     plt.tight_layout()
@@ -699,7 +917,7 @@ def main():
     parser.add_argument('--indicator-window', type=int, default=60,
                        help='指标计算窗口（默认60天，建议不小于60）')
     parser.add_argument('--use-local-db', action='store_true',
-                       help='使用本地数据库（默认使用在线Tushare）')
+                       help='使用本地数据库，速度更快（默认使用在线Tushare，需要配置database模块）')
     parser.add_argument('--output-dir', type=str, default=OUTPUT_DIR,
                        help=f'输出目录（默认: {OUTPUT_DIR}）')
 

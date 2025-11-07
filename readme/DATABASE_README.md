@@ -103,27 +103,27 @@ python database/fetch_data_to_db.py --init --codes "688256.SH,603893.SH,300502.S
 
 ```bash
 # 原命令（在线Tushare）
-python technical_analysis.py --code 688256.SH --days 60
+python3 scripts/technical_analysis.py --code 688256.SH --days 60
 
 # 使用本地数据库（速度快100倍+）
-python technical_analysis.py --code 688256.SH --days 60 --use-local-db
+python3 scripts/technical_analysis.py --code 688256.SH --days 60 --use-local-db
 ```
 
 #### 批量技术分析
 
 ```bash
 # 使用本地数据库分析股票池
-python batch_technical_analysis.py --pool stock_pool_example.txt --use-local-db
+python3 batch_technical_analysis.py --pool stock_pool_example.txt --use-local-db
 ```
 
 #### 高级技术分析
 
 ```bash
 # 单个股票高级分析
-python advanced_technical_analysis.py --code 688256.SH --days 120 --use-local-db
+python3 scripts/advanced_technical_analysis.py --code 688256.SH --days 120 --use-local-db
 
 # 批量分析股票池
-python advanced_technical_analysis.py --pool stock_pool_example.txt --batch --use-local-db
+python3 scripts/advanced_technical_analysis.py --pool pool/stock_pool_example.txt --batch --use-local-db
 ```
 
 #### 每日打分排名 ⭐ 智能日期对齐
@@ -131,7 +131,7 @@ python advanced_technical_analysis.py --pool stock_pool_example.txt --batch --us
 ```bash
 # 批量打分排名（4进程并行）
 # 使用本地数据库时，会自动查询所有股票共同的最新日期作为基准
-python daily_stock_scoring.py --pool stock_pool_example.txt --days 60 --workers 4 --use-local-db
+python3 scripts/daily_stock_scoring.py --pool pool/stock_pool_example.txt --days 60 --workers 4 --use-local-db
 ```
 
 > **💡 智能日期对齐**：当使用本地数据库时，系统会：
@@ -157,13 +157,13 @@ python daily_stock_scoring.py --pool stock_pool_example.txt --days 60 --workers 
 
 ```bash
 # 增量更新所有股票的最新数据（只下载缺失的日期）
-python database/fetch_data_to_db.py --update
+python3 database/fetch_data_to_db.py --update
 
 # 更新指定股票
-python database/fetch_data_to_db.py --update --codes "688256.SH,603893.SH"
+python3 database/fetch_data_to_db.py --update --codes "688256.SH,603893.SH"
 
 # 更新指定股票池
-python database/fetch_data_to_db.py --update --pool stock_pool_example.txt
+python3 database/fetch_data_to_db.py --update --pool pool/stock_pool_example.txt
 ```
 
 > **💡 建议**：每日收盘后运行一次增量更新，耗时约 **1-2分钟**

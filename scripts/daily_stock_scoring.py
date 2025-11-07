@@ -20,6 +20,14 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+# ==================== 路径配置 ====================
+# 将项目根目录添加到 Python 路径，以便导入 database 模块
+# 这样无论从哪个目录运行脚本都能正常工作
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # 导入本地数据库查询模块
 try:
     from database.query_helper import StockDataQuery
@@ -72,7 +80,7 @@ class StockScoringAnalyzer:
         else:
             # 读取 Tushare token
             if ts_token is None:
-                token_file = os.path.join(os.path.dirname(__file__), 'token.txt')
+                token_file = os.path.join(os.path.dirname(__file__), '../token.txt')
                 try:
                     with open(token_file, 'r', encoding='utf-8') as f:
                         ts_token = f.read().strip()
