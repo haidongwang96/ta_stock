@@ -336,6 +336,9 @@ class StockScoringAnalyzer:
         if df is None or df.empty or len(df) < lookback * 2:
             return df
 
+        # 重置索引以确保使用连续的整数索引
+        df = df.reset_index(drop=True)
+
         df['RSI_Divergence'] = ''
         df['MACD_Divergence'] = ''
 
@@ -379,6 +382,9 @@ class StockScoringAnalyzer:
         """
         if df is None or df.empty:
             return df
+
+        # 重置索引以确保使用连续的整数索引
+        df = df.reset_index(drop=True)
 
         # 初始化打分列
         df['Trend_Score'] = 0
@@ -712,6 +718,73 @@ class StockScoringAnalyzer:
         return df
 
 
+# ==================== 辅助函数 ====================
+
+def get_latest_date_and_filter_stocks(stock_codes, use_local_db=False):
+    """
+    获取股票池中的最新日期，并筛选出有该日期数据的股票
+
+    Args:
+        stock_codes: 股票代码列表
+        use_local_db: 是否使用本地数据库
+
+    Returns:
+        (最新日期, 有该日期数据的股票代码列表) 元组
+        如果无法确定则返回 (None, [])
+    """
+    if not use_local_db or not LOCAL_DB_AVAILABLE:
+        # 不使用本地数据库，返回今天和所有股票
+        return datetime.now().strftime('%Y%m%d'), stock_codes
+
+    try:
+        from database.db_manager import StockDatabase
+
+        db = StockDatabase()
+        stock_date_map = {}  # 记录每个股票的最新日期
+
+        logger.info("正在查询股票池中所有股票的最新日期...")
+
+        for code in stock_codes:
+            latest_date = db.get_latest_date(code)
+            if latest_date:
+                stock_date_map[code] = latest_date
+                logger.debug(f"  {code}: {latest_date}")
+            else:
+                logger.warning(f"  {code}: 数据库中无数据")
+
+        db.close()
+
+        if not stock_date_map:
+            logger.error("股票池中所有股票在数据库中都没有数据")
+            return None, []
+
+        # 找出最新的日期（所有股票中最晚的日期）
+        all_dates = list(stock_date_map.values())
+        latest_date = max(all_dates)
+
+        # 筛选出有最新日期数据的股票
+        stocks_with_latest_date = [code for code, date in stock_date_map.items() if date == latest_date]
+        stocks_without_latest_date = [code for code, date in stock_date_map.items() if date < latest_date]
+
+        logger.info(f"✓ 数据库最新日期: {latest_date}")
+        logger.info(f"  日期范围: {min(all_dates)} 至 {latest_date}")
+        logger.info(f"  有最新日期数据的股票: {len(stocks_with_latest_date)}/{len(stock_codes)} 只")
+
+        if stocks_without_latest_date:
+            logger.warning(f"  {len(stocks_without_latest_date)} 只股票数据未更新到最新日期，将被排除:")
+            # 显示前10只未更新的股票
+            excluded_display = ', '.join(stocks_without_latest_date[:10])
+            if len(stocks_without_latest_date) > 10:
+                excluded_display += f" 等{len(stocks_without_latest_date)}只"
+            logger.warning(f"    排除股票: {excluded_display}")
+
+        return latest_date, stocks_with_latest_date
+
+    except Exception as e:
+        logger.error(f"查询最新日期失败: {e}")
+        return None, []
+
+
 # ==================== 多进程工作函数 ====================
 
 def analyze_single_stock(args):
@@ -833,9 +906,56 @@ def get_score_level(score):
         return "强烈看空"
 
 
-def generate_comprehensive_report(results, output_file):
+def extract_category_signals(score_details, category):
+    """
+    从得分明细中提取特定分类的信号
+
+    Args:
+        score_details: 得分明细字符串（用分号分隔）
+        category: 分类类型 ('trend', 'momentum', 'volatility', 'volume', 'pattern')
+
+    Returns:
+        该分类的信号列表字符串
+    """
+    if not score_details or pd.isna(score_details):
+        return ""
+
+    # 定义各分类的关键词
+    category_keywords = {
+        'trend': ['MACD', 'SAR', '均线', '多头排列', '空头排列', '红柱', '绿柱', '金叉', '死叉', '空转多', '多转空'],
+        'momentum': ['RSI', 'KDJ', 'CCI', '超买', '超卖', 'J值', 'K值', 'D值', '中轴'],
+        'volatility': ['布林', '上轨', '下轨', 'ATR', '波动', '开口'],
+        'volume': ['VWAP', 'MFI', 'OBV', '成交量', '量比', '放量', '缩量', '资金'],
+        'pattern': ['背离', '支撑', '阻力', '锤子', '射击', '十字星', '大阳', '大阴', '突破', '跌破']
+    }
+
+    if category not in category_keywords:
+        return ""
+
+    keywords = category_keywords[category]
+    signals = []
+
+    # 分割得分明细
+    details_list = score_details.split('; ')
+
+    # 筛选包含关键词的信号
+    for detail in details_list:
+        for keyword in keywords:
+            if keyword in detail:
+                signals.append(detail)
+                break
+
+    return '; '.join(signals) if signals else "-"
+
+
+def generate_comprehensive_report(results, output_file, analysis_date=None):
     """
     生成详细版综合报告
+
+    Args:
+        results: 分析结果列表
+        output_file: 输出文件路径
+        analysis_date: 分析基准日期（YYYYMMDD格式），如果为None则使用当前时间
     """
     if not results:
         logger.warning("没有分析结果，无法生成报告")
@@ -844,11 +964,33 @@ def generate_comprehensive_report(results, output_file):
     # 按总分排序
     results_sorted = sorted(results, key=lambda x: x['total_score'], reverse=True)
 
+    # 按各分类得分排序
+    results_by_trend = sorted(results, key=lambda x: x['trend_score'], reverse=True)
+    results_by_momentum = sorted(results, key=lambda x: x['momentum_score'], reverse=True)
+    results_by_volatility = sorted(results, key=lambda x: x['volatility_score'], reverse=True)
+    results_by_volume = sorted(results, key=lambda x: x['volume_score'], reverse=True)
+    results_by_pattern = sorted(results, key=lambda x: x['pattern_score'], reverse=True)
+
     # 统计数据
     total_count = len(results)
     avg_score = np.mean([r['total_score'] for r in results])
     max_score = max([r['total_score'] for r in results])
     min_score = min([r['total_score'] for r in results])
+
+    # 各分类得分统计
+    trend_scores = [r['trend_score'] for r in results]
+    momentum_scores = [r['momentum_score'] for r in results]
+    volatility_scores = [r['volatility_score'] for r in results]
+    volume_scores = [r['volume_score'] for r in results]
+    pattern_scores = [r['pattern_score'] for r in results]
+
+    category_stats = {
+        '趋势类': {'avg': np.mean(trend_scores), 'max': max(trend_scores), 'min': min(trend_scores)},
+        '动量类': {'avg': np.mean(momentum_scores), 'max': max(momentum_scores), 'min': min(momentum_scores)},
+        '波动类': {'avg': np.mean(volatility_scores), 'max': max(volatility_scores), 'min': min(volatility_scores)},
+        '成交量类': {'avg': np.mean(volume_scores), 'max': max(volume_scores), 'min': min(volume_scores)},
+        '形态类': {'avg': np.mean(pattern_scores), 'max': max(pattern_scores), 'min': min(pattern_scores)}
+    }
 
     # 分类统计
     strong_bullish = [r for r in results if r['total_score'] >= 8]
@@ -876,10 +1018,19 @@ def generate_comprehensive_report(results, output_file):
         f.write("=" * 100 + "\n")
         f.write("股票当日技术面打分排名报告\n")
         f.write("=" * 100 + "\n")
-        f.write(f"分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        if analysis_date:
+            # 格式化日期显示
+            formatted_date = f"{analysis_date[:4]}-{analysis_date[4:6]}-{analysis_date[6:]}"
+            f.write(f"分析基准日期: {formatted_date} (数据库最新日期)\n")
         f.write(f"分析股票数量: {total_count}\n")
         f.write(f"平均总分: {avg_score:.2f}\n")
         f.write(f"最高分: {max_score:.0f} | 最低分: {min_score:.0f}\n")
+        # 添加分类得分统计
+        f.write(f"\n分类得分概览:\n")
+        for category_name, stats in category_stats.items():
+            f.write(f"  {category_name}: 平均 {stats['avg']:+.2f} | "
+                   f"最高 {stats['max']:+.0f} | 最低 {stats['min']:+.0f}\n")
         f.write("\n")
 
         # 综合得分排行榜
@@ -900,6 +1051,71 @@ def generate_comprehensive_report(results, output_file):
                    f"{r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
                    f"{r['mfi']:>6.1f}  {details_str}\n")
 
+        f.write("\n\n")
+
+        # 趋势类打分排行榜
+        f.write("-" * 100 + "\n")
+        f.write("【趋势类打分排行榜 TOP 30】\n")
+        f.write("-" * 100 + "\n")
+        f.write(f"{'排名':<6}{'股票代码':<12}{'名称':<10}{'趋势分':<8}{'总分':<8}{'收盘价':<10}{'涨跌幅':<10}{'趋势类信号'}\n")
+        f.write("-" * 100 + "\n")
+        for idx, r in enumerate(results_by_trend[:30], 1):
+            trend_signals = extract_category_signals(r['score_details'], 'trend')
+            f.write(f"{idx:<6}{r['code']:<12}{r['name']:<10}{r['trend_score']:>+6.0f}  "
+                   f"{r['total_score']:>+6.0f}  {r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
+                   f"{trend_signals}\n")
+        f.write("\n\n")
+
+        # 动量类打分排行榜
+        f.write("-" * 100 + "\n")
+        f.write("【动量类打分排行榜 TOP 30】\n")
+        f.write("-" * 100 + "\n")
+        f.write(f"{'排名':<6}{'股票代码':<12}{'名称':<10}{'动量分':<8}{'总分':<8}{'收盘价':<10}{'涨跌幅':<10}{'动量类信号'}\n")
+        f.write("-" * 100 + "\n")
+        for idx, r in enumerate(results_by_momentum[:30], 1):
+            momentum_signals = extract_category_signals(r['score_details'], 'momentum')
+            f.write(f"{idx:<6}{r['code']:<12}{r['name']:<10}{r['momentum_score']:>+6.0f}  "
+                   f"{r['total_score']:>+6.0f}  {r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
+                   f"{momentum_signals}\n")
+        f.write("\n\n")
+
+        # 波动类打分排行榜
+        f.write("-" * 100 + "\n")
+        f.write("【波动类打分排行榜 TOP 30】\n")
+        f.write("-" * 100 + "\n")
+        f.write(f"{'排名':<6}{'股票代码':<12}{'名称':<10}{'波动分':<8}{'总分':<8}{'收盘价':<10}{'涨跌幅':<10}{'波动类信号'}\n")
+        f.write("-" * 100 + "\n")
+        for idx, r in enumerate(results_by_volatility[:30], 1):
+            volatility_signals = extract_category_signals(r['score_details'], 'volatility')
+            f.write(f"{idx:<6}{r['code']:<12}{r['name']:<10}{r['volatility_score']:>+6.0f}  "
+                   f"{r['total_score']:>+6.0f}  {r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
+                   f"{volatility_signals}\n")
+        f.write("\n\n")
+
+        # 成交量类打分排行榜
+        f.write("-" * 100 + "\n")
+        f.write("【成交量类打分排行榜 TOP 30】\n")
+        f.write("-" * 100 + "\n")
+        f.write(f"{'排名':<6}{'股票代码':<12}{'名称':<10}{'成交量分':<10}{'总分':<8}{'收盘价':<10}{'涨跌幅':<10}{'成交量类信号'}\n")
+        f.write("-" * 100 + "\n")
+        for idx, r in enumerate(results_by_volume[:30], 1):
+            volume_signals = extract_category_signals(r['score_details'], 'volume')
+            f.write(f"{idx:<6}{r['code']:<12}{r['name']:<10}{r['volume_score']:>+8.0f}  "
+                   f"{r['total_score']:>+6.0f}  {r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
+                   f"{volume_signals}\n")
+        f.write("\n\n")
+
+        # 形态类打分排行榜
+        f.write("-" * 100 + "\n")
+        f.write("【形态类打分排行榜 TOP 30】\n")
+        f.write("-" * 100 + "\n")
+        f.write(f"{'排名':<6}{'股票代码':<12}{'名称':<10}{'形态分':<8}{'总分':<8}{'收盘价':<10}{'涨跌幅':<10}{'形态类信号'}\n")
+        f.write("-" * 100 + "\n")
+        for idx, r in enumerate(results_by_pattern[:30], 1):
+            pattern_signals = extract_category_signals(r['score_details'], 'pattern')
+            f.write(f"{idx:<6}{r['code']:<12}{r['name']:<10}{r['pattern_score']:>+6.0f}  "
+                   f"{r['total_score']:>+6.0f}  {r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
+                   f"{pattern_signals}\n")
         f.write("\n\n")
 
         # 分项得分统计
@@ -1054,9 +1270,40 @@ def save_csv_summary(results, output_file):
     # 按总分排序
     df = df.sort_values('total_score', ascending=False).reset_index(drop=True)
 
-    # 添加排名和等级
+    # 添加综合排名和等级
     df.insert(0, 'rank', range(1, len(df) + 1))
     df['score_level'] = df['total_score'].apply(get_score_level)
+
+    # 添加各分类排名
+    # 趋势类排名
+    df_trend = df[['code', 'trend_score']].copy()
+    df_trend = df_trend.sort_values('trend_score', ascending=False).reset_index(drop=True)
+    df_trend['trend_rank'] = range(1, len(df_trend) + 1)
+    df = df.merge(df_trend[['code', 'trend_rank']], on='code', how='left')
+
+    # 动量类排名
+    df_momentum = df[['code', 'momentum_score']].copy()
+    df_momentum = df_momentum.sort_values('momentum_score', ascending=False).reset_index(drop=True)
+    df_momentum['momentum_rank'] = range(1, len(df_momentum) + 1)
+    df = df.merge(df_momentum[['code', 'momentum_rank']], on='code', how='left')
+
+    # 波动类排名
+    df_volatility = df[['code', 'volatility_score']].copy()
+    df_volatility = df_volatility.sort_values('volatility_score', ascending=False).reset_index(drop=True)
+    df_volatility['volatility_rank'] = range(1, len(df_volatility) + 1)
+    df = df.merge(df_volatility[['code', 'volatility_rank']], on='code', how='left')
+
+    # 成交量类排名
+    df_volume = df[['code', 'volume_score']].copy()
+    df_volume = df_volume.sort_values('volume_score', ascending=False).reset_index(drop=True)
+    df_volume['volume_rank'] = range(1, len(df_volume) + 1)
+    df = df.merge(df_volume[['code', 'volume_rank']], on='code', how='left')
+
+    # 形态类排名
+    df_pattern = df[['code', 'pattern_score']].copy()
+    df_pattern = df_pattern.sort_values('pattern_score', ascending=False).reset_index(drop=True)
+    df_pattern['pattern_rank'] = range(1, len(df_pattern) + 1)
+    df = df.merge(df_pattern[['code', 'pattern_rank']], on='code', how='left')
 
     # 保存
     df.to_csv(output_file, index=False, encoding='utf-8-sig')
@@ -1086,17 +1333,35 @@ def main():
         logger.error("股票池为空，退出")
         sys.exit(1)
 
+    # 提取股票代码列表
+    stock_codes = [s['code'] for s in stocks]
+
     # 计算日期范围
     end_date = datetime.now().strftime('%Y%m%d')
     start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y%m%d')
 
-    logger.info(f"开始批量分析 {len(stocks)} 只股票")
+    # 如果使用本地数据库，查询最新日期并筛选股票
+    filtered_stocks = stocks  # 默认使用所有股票
+    if args.use_local_db:
+        latest_date, stocks_with_latest = get_latest_date_and_filter_stocks(stock_codes, use_local_db=True)
+        if latest_date is None:
+            logger.error("无法确定最新日期，退出")
+            sys.exit(1)
+        # 使用最新日期作为结束日期
+        end_date = latest_date
+        # 筛选出有最新日期数据的股票
+        filtered_stocks = [s for s in stocks if s['code'] in stocks_with_latest]
+        logger.info(f"使用本地数据库最新日期: {end_date}")
+
+    logger.info(f"开始批量分析 {len(filtered_stocks)} 只股票")
+    if args.use_local_db and len(filtered_stocks) < len(stocks):
+        logger.warning(f"  (原股票池 {len(stocks)} 只，{len(stocks) - len(filtered_stocks)} 只因数据未更新被排除)")
     logger.info(f"日期范围: {start_date} 至 {end_date}")
     logger.info(f"并发进程数: {args.workers}")
     logger.info(f"数据源: {'本地数据库' if args.use_local_db else '在线Tushare'}")
 
-    # 准备任务参数
-    tasks = [(s['code'], s['name'], start_date, end_date, args.use_local_db) for s in stocks]
+    # 准备任务参数（只处理筛选后的股票）
+    tasks = [(s['code'], s['name'], start_date, end_date, args.use_local_db) for s in filtered_stocks]
 
     # 多进程批量处理
     results = []
@@ -1121,7 +1386,9 @@ def main():
 
         # TXT详细报告
         txt_file = os.path.join(output_dir, f'daily_scoring_report_{timestamp}.txt')
-        generate_comprehensive_report(results, txt_file)
+        # 如果使用本地数据库，传入分析基准日期
+        generate_comprehensive_report(results, txt_file,
+                                     analysis_date=end_date if args.use_local_db else None)
 
         # CSV汇总
         csv_file = os.path.join(output_dir, f'daily_scoring_summary_{timestamp}.csv')
@@ -1129,7 +1396,11 @@ def main():
 
         logger.info(f"\n{'='*50}")
         logger.info(f"批量分析完成！")
-        logger.info(f"成功分析: {len(results)}/{len(stocks)} 只股票")
+        logger.info(f"成功分析: {len(results)}/{len(filtered_stocks)} 只股票")
+        if args.use_local_db:
+            logger.info(f"分析基准日期: {end_date}")
+            if len(filtered_stocks) < len(stocks):
+                logger.info(f"排除股票: {len(stocks) - len(filtered_stocks)} 只（数据未更新到最新日期）")
         logger.info(f"详细报告: {txt_file}")
         logger.info(f"CSV汇总: {csv_file}")
         logger.info(f"{'='*50}")

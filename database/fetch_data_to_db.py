@@ -340,8 +340,8 @@ class DataFetcher:
                         start_date_dt = datetime.strptime(latest_date, '%Y%m%d') + timedelta(days=1)
                         start_date = start_date_dt.strftime('%Y%m%d')
 
-                        # 如果已是最新，跳过
-                        if start_date >= end_date:
+                        # 如果已是最新，跳过（只有当起始日期大于结束日期时才跳过）
+                        if start_date > end_date:
                             logger.info(f"[{i}/{len(stock_codes)}] {code} 数据已是最新，跳过")
                             success_count += 1
                             continue

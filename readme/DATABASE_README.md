@@ -6,6 +6,7 @@
 - ✅ **脱离网络依赖**：数据查询速度提升100倍+
 - ✅ **减少API调用**：节省95%以上的 Tushare API 调用次数
 - ✅ **技术指标预计算**：常用指标（MA、MACD、RSI等）预存，分析速度提升3-5倍
+- ✅ **智能日期对齐**：批量分析时自动使用所有股票共同的最新日期，确保公平比较
 - ✅ **易于扩展**：支持未来添加分钟线、基本面等更多数据
 
 ---
@@ -125,11 +126,29 @@ python advanced_technical_analysis.py --code 688256.SH --days 120 --use-local-db
 python advanced_technical_analysis.py --pool stock_pool_example.txt --batch --use-local-db
 ```
 
-#### 每日打分排名
+#### 每日打分排名 ⭐ 智能日期对齐
 
 ```bash
 # 批量打分排名（4进程并行）
+# 使用本地数据库时，会自动查询所有股票共同的最新日期作为基准
 python daily_stock_scoring.py --pool stock_pool_example.txt --days 60 --workers 4 --use-local-db
+```
+
+> **💡 智能日期对齐**：当使用本地数据库时，系统会：
+> 1. 扫描股票池中所有股票的最新日期
+> 2. 找出所有股票都有数据的最新日期（共同最新日期）
+> 3. 使用这个日期作为统一的分析基准
+> 4. 确保所有股票在同一天的数据上进行公平比较
+
+**示例输出**：
+```
+正在查询股票池中所有股票的最新日期...
+✓ 股票池共同最新日期: 20250105
+  最早: 20250105
+  最晚: 20250106
+  共有 120/120 只股票有数据
+  注意：15 只股票数据较新，将统一使用 20250105 作为基准日期
+  数据较新的股票: 688256.SH, 603893.SH, 300502.SZ 等15只
 ```
 
 ---
@@ -148,6 +167,8 @@ python database/fetch_data_to_db.py --update --pool stock_pool_example.txt
 ```
 
 > **💡 建议**：每日收盘后运行一次增量更新，耗时约 **1-2分钟**
+>
+> **🔧 Bug修复**：已修复增量更新无法获取当天数据的问题（原判断条件为 `>=`，已改为 `>`）
 
 ---
 
@@ -285,7 +306,10 @@ db = StockDatabase(db_path='/path/to/my_stock_data.db')
 python database/fetch_data_to_db.py --update
 ```
 
-### Q3: 如何知道数据库中有哪些股票？
+### Q3: 增量更新时无法获取今天的数据？
+**A:** 这个bug已经修复！原来的判断条件 `if start_date >= end_date` 会跳过今天的数据，现已改为 `if start_date > end_date`。
+
+### Q4: 如何知道数据库中有哪些股票？
 **A:**
 ```python
 from database.db_manager import StockDatabase
@@ -296,16 +320,36 @@ print(stock_list)
 db.close()
 ```
 
-### Q4: 数据库文件太大怎么办？
+### Q5: 批量打分时，不同股票数据更新时间不同怎么办？
+**A:** 使用 `--use-local-db` 参数时，系统会自动：
+- 查询所有股票的最新日期
+- 找出共同的最新日期（所有股票都有数据的最新日期）
+- 使用这个统一日期进行分析
+- 确保所有股票在同一天的数据上进行公平比较
+
+**示例**：
+```bash
+python daily_stock_scoring.py --pool stock_pool_example.txt --use-local-db
+```
+
+输出会显示：
+```
+正在查询股票池中所有股票的最新日期...
+✓ 股票池共同最新日期: 20250105
+  最早: 20250105
+  最晚: 20250106
+```
+
+### Q6: 数据库文件太大怎么办？
 **A:** SQLite数据库会随着数据增长而增大。如果需要清理：
 - 删除不需要的股票数据（使用 `delete_stock_data()`）
 - 缩短历史数据范围（重新初始化时使用 `--days` 指定更短的天数）
 - 使用 SQLite VACUUM 命令压缩数据库
 
-### Q5: 可以同时使用本地数据库和在线Tushare吗？
+### Q7: 可以同时使用本地数据库和在线Tushare吗？
 **A:** 可以！脚本默认使用在线Tushare，添加 `--use-local-db` 参数时使用本地数据库。
 
-### Q6: 数据库损坏怎么办？
+### Q8: 数据库损坏怎么办？
 **A:** 删除 `stock_data.db` 文件，重新运行初始化命令。
 
 ---
@@ -330,12 +374,13 @@ ta_stock/
 │   ├── db_manager.py             # 数据库管理类（底层API）
 │   ├── query_helper.py           # 查询辅助类（高层API）
 │   └── fetch_data_to_db.py       # 数据抓取脚本
+├── md/                           # 文档目录
+│   └── DATABASE_README.md        # 本文档
 ├── stock_data.db                 # SQLite数据库文件（初始化后生成）
-├── DATABASE_README.md            # 本文档
 ├── technical_analysis.py         # 单股票技术分析（支持 --use-local-db）
 ├── batch_technical_analysis.py   # 批量技术分析（支持 --use-local-db）
 ├── advanced_technical_analysis.py # 高级技术分析（支持 --use-local-db）
-├── daily_stock_scoring.py        # 每日打分排名（支持 --use-local-db）
+├── daily_stock_scoring.py        # 每日打分排名（支持 --use-local-db + 智能日期对齐）
 └── stock_pool_example.txt        # 股票池示例
 ```
 
@@ -349,7 +394,7 @@ ta_stock/
 # 1. 早上/收盘后：增量更新数据
 python database/fetch_data_to_db.py --update
 
-# 2. 运行分析（使用本地数据库）
+# 2. 运行分析（使用本地数据库，自动日期对齐）
 python daily_stock_scoring.py --pool stock_pool_example.txt --use-local-db
 
 # 3. 查看结果
@@ -394,6 +439,31 @@ python database/fetch_data_to_db.py --init
 ### 4. 技术指标为 NaN
 **原因**：指标计算需要足够的历史数据
 **解决**：增加初始化时的天数（`--days` 参数至少60天）
+
+### 5. 增量更新无法获取今天的数据
+**原因**：这是已修复的bug，如果仍有问题，请检查代码版本
+**解决**：确保 `fetch_data_to_db.py` 第344行的判断条件为 `if start_date > end_date:`（不是 `>=`）
+
+---
+
+## 🆕 版本更新日志
+
+### v1.1 (2025-01-06)
+- ✅ **新增**：智能日期对齐功能（`daily_stock_scoring.py`）
+  - 自动查询股票池中所有股票的最新日期
+  - 使用共同最新日期作为分析基准
+  - 确保批量比较的公平性
+- ✅ **修复**：增量更新无法获取当天数据的bug
+  - 原判断条件 `start_date >= end_date` 导致跳过当天
+  - 修正为 `start_date > end_date`
+- ✅ **改进**：报告中显示分析基准日期
+
+### v1.0 (2025-01-05)
+- ✅ 初始版本发布
+- ✅ 支持SQLite本地数据库
+- ✅ 预计算20+常用技术指标
+- ✅ 支持全量初始化和增量更新
+- ✅ 所有分析脚本支持本地数据库
 
 ---
 
