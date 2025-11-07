@@ -121,6 +121,15 @@ class RollingScoreAnalyzer:
         # 创建基础分析器
         self.analyzer = StockScoringAnalyzer(use_local_db=use_local_db)
 
+        # 初始化打分数据仓库
+        try:
+            from database.score_repository import ScoreRepository
+            self.score_repo = ScoreRepository()
+            logger.debug("✓ 打分数据仓库初始化成功")
+        except Exception as e:
+            logger.warning(f"⚠️  打分数据仓库初始化失败: {e}")
+            self.score_repo = None
+
         logger.info(f"初始化滚动窗口分析器: {self.stock_code} ({self.stock_name})")
 
         # 显示实际使用的数据源
@@ -129,7 +138,8 @@ class RollingScoreAnalyzer:
         else:
             logger.info(f"✓ 数据源: 在线Tushare")
 
-    def calculate_rolling_scores(self, end_date=None, num_windows=30, indicator_window=60):
+    def calculate_rolling_scores(self, end_date=None, num_windows=30, indicator_window=60,
+                                force_recalculate=False):
         """
         计算滚动窗口得分
 
@@ -137,6 +147,7 @@ class RollingScoreAnalyzer:
             end_date: 结束日期（YYYYMMDD格式），默认为今天
             num_windows: 要计算的窗口数量（默认30个交易日）
             indicator_window: 每个窗口用于计算技术指标的历史数据天数（默认60天）
+            force_recalculate: 是否强制重新计算（默认False，优先读取数据库）
 
         Returns:
             DataFrame包含所有窗口的得分数据
@@ -151,6 +162,38 @@ class RollingScoreAnalyzer:
         logger.info(f"窗口数量: {num_windows} 个交易日")
         logger.info(f"指标计算窗口: {indicator_window} 天")
         logger.info("=" * 80)
+
+        # 尝试从数据库读取（如果未强制重新计算且仓库可用）
+        if not force_recalculate and self.score_repo:
+            logger.info("\n检查数据库缓存...")
+            try:
+                df_cached = self.score_repo.load_scores(self.stock_code)
+
+                if df_cached is not None and not df_cached.empty:
+                    # 检查数据完整性
+                    cached_count = len(df_cached)
+                    cached_date_range = (df_cached['date'].min(), df_cached['date'].max())
+
+                    logger.info(f"✓ 从数据库加载打分数据: {cached_count} 条记录")
+                    logger.info(f"  日期范围: {cached_date_range[0]} 至 {cached_date_range[1]}")
+
+                    # 如果缓存数据足够（>=请求的窗口数），直接返回
+                    if cached_count >= num_windows:
+                        logger.info(f"✓ 数据完整，跳过重复计算")
+
+                        # 返回最新的 num_windows 条记录
+                        df_results = df_cached.head(num_windows).copy()
+                        return df_results
+                    else:
+                        logger.info(f"⚠️  缓存数据不足 ({cached_count} < {num_windows})，重新计算")
+                else:
+                    logger.info("✓ 数据库中无打分数据，开始计算...")
+            except Exception as e:
+                logger.warning(f"⚠️  读取数据库失败: {e}，继续计算...")
+        elif force_recalculate:
+            logger.info("⚠️  强制重新计算模式")
+        else:
+            logger.info("✓ 数据库仓库不可用，直接计算")
 
         # 计算需要获取的总数据量
         # 需要 num_windows 个交易日的得分，每个得分需要 indicator_window 天的数据
@@ -270,6 +313,14 @@ class RollingScoreAnalyzer:
         logger.info(f"  日期范围: {df_results['date'].min()} 至 {df_results['date'].max()}")
         logger.info(f"  得分范围: {df_results['total_score'].min():+.0f} 至 {df_results['total_score'].max():+.0f}")
         logger.info(f"  平均得分: {df_results['total_score'].mean():+.2f}")
+
+        # 保存到数据库
+        if self.score_repo:
+            try:
+                logger.info(f"\n保存打分数据到数据库...")
+                self.score_repo.save_scores(self.stock_code, df_results)
+            except Exception as e:
+                logger.warning(f"⚠️  保存到数据库失败: {e}")
 
         return df_results
 
@@ -605,7 +656,17 @@ def generate_charts(df, stock_code, stock_name, output_dir=OUTPUT_DIR):
 
     # 准备数据（按日期升序）
     df_plot = df.sort_values('date', ascending=True).copy()
-    df_plot['date'] = pd.to_datetime(df_plot['date'], format='%Y%m%d')
+
+    # 处理日期格式（兼容YYYYMMDD和datetime对象）
+    if df_plot['date'].dtype == 'object':
+        # 字符串格式，尝试解析
+        try:
+            df_plot['date'] = pd.to_datetime(df_plot['date'], format='%Y%m%d')
+        except:
+            df_plot['date'] = pd.to_datetime(df_plot['date'])
+    elif not pd.api.types.is_datetime64_any_dtype(df_plot['date']):
+        # 其他格式，直接转换
+        df_plot['date'] = pd.to_datetime(df_plot['date'])
 
     # 计算累计涨跌幅（相对于第一天）
     first_close = df_plot['close'].iloc[0]
@@ -921,6 +982,16 @@ def main():
     parser.add_argument('--output-dir', type=str, default=OUTPUT_DIR,
                        help=f'输出目录（默认: {OUTPUT_DIR}）')
 
+    # 数据库相关参数
+    parser.add_argument('--force-recalculate', action='store_true',
+                       help='强制重新计算，忽略数据库缓存')
+    parser.add_argument('--clear-cache', action='store_true',
+                       help='清除该股票的数据库缓存后重新计算')
+    parser.add_argument('--db-info', action='store_true',
+                       help='显示数据库中该股票的打分数据信息')
+    parser.add_argument('--db-export', action='store_true',
+                       help='从数据库导出打分数据到CSV（不重新计算）')
+
     args = parser.parse_args()
 
     # 参数验证
@@ -939,11 +1010,53 @@ def main():
             use_local_db=args.use_local_db
         )
 
+        # 处理数据库信息查询
+        if args.db_info:
+            if analyzer.score_repo:
+                info = analyzer.score_repo.get_score_info(args.code)
+                if info:
+                    print("\n" + "=" * 60)
+                    print(f"数据库打分信息")
+                    print("=" * 60)
+                    print(f"股票代码: {info['ts_code']}")
+                    print(f"记录数量: {info['record_count']} 条")
+                    print(f"日期范围: {info['date_range'][0]} - {info['date_range'][1]}")
+                    print(f"平均得分: {info['avg_score']:+.2f}" if info['avg_score'] else "平均得分: N/A")
+                    print(f"最后更新: {info['last_update']}")
+                    print("=" * 60)
+                else:
+                    print(f"\n{args.code} 无打分数据")
+            else:
+                print("\n⚠️  数据库仓库不可用")
+            sys.exit(0)
+
+        # 处理数据库导出
+        if args.db_export:
+            if analyzer.score_repo:
+                df_cached = analyzer.score_repo.load_scores(args.code)
+                if df_cached is not None and not df_cached.empty:
+                    csv_path = save_csv(df_cached, args.code, args.output_dir)
+                    print(f"\n✓ 已从数据库导出 {len(df_cached)} 条记录到: {csv_path}")
+                else:
+                    print(f"\n{args.code} 无打分数据可导出")
+            else:
+                print("\n⚠️  数据库仓库不可用")
+            sys.exit(0)
+
+        # 处理清除缓存
+        if args.clear_cache:
+            if analyzer.score_repo:
+                logger.info(f"\n清除 {args.code} 的数据库缓存...")
+                analyzer.score_repo.delete_scores(args.code)
+            else:
+                logger.warning("\n⚠️  数据库仓库不可用，无法清除缓存")
+
         # 计算滚动窗口得分
         df_results = analyzer.calculate_rolling_scores(
             end_date=args.end_date,
             num_windows=args.num_windows,
-            indicator_window=args.indicator_window
+            indicator_window=args.indicator_window,
+            force_recalculate=args.force_recalculate or args.clear_cache
         )
 
         if df_results is None or df_results.empty:

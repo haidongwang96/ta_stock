@@ -3,7 +3,7 @@
 
 # Ignore text files
 *.txt
-*.dbs
+stock_data.db
 
 # Ignore JSON files
 *.json

@@ -123,6 +123,41 @@ class StockDatabase:
             )
         ''')
 
+        # 4. 滚动窗口打分数据表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS rolling_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                close REAL,
+                next_date TEXT,
+                change_pct REAL,
+                -- 得分数据
+                total_score REAL,
+                trend_score REAL,
+                momentum_score REAL,
+                volatility_score REAL,
+                volume_score REAL,
+                pattern_score REAL,
+                score_level TEXT,
+                -- 关键指标
+                rsi REAL,
+                mfi REAL,
+                k REAL,
+                d REAL,
+                j REAL,
+                cci REAL,
+                atr REAL,
+                volume_ratio REAL,
+                -- 详细信息
+                score_details TEXT,
+                signals TEXT,
+                -- 元数据
+                updated_at TEXT,
+                UNIQUE(ts_code, trade_date)
+            )
+        ''')
+
         # 创建索引以提高查询性能
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_code_date
@@ -142,6 +177,16 @@ class StockDatabase:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_daily_indicators_date
             ON daily_indicators(trade_date)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_rolling_scores_code
+            ON rolling_scores(ts_code)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_rolling_scores_date
+            ON rolling_scores(trade_date)
         ''')
 
         self.conn.commit()
