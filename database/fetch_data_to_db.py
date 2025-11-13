@@ -53,7 +53,60 @@ class DataFetcher:
 
         # 初始化数据库
         self.db = StockDatabase(db_path)
+
+        # 交易日历缓存
+        self.trade_cal_cache = {}
+
         logger.info("数据抓取器初始化完成")
+
+    def is_trade_date(self, date: str) -> bool:
+        """
+        判断指定日期是否为股票交易日
+
+        Args:
+            date: 日期字符串，格式为 YYYYMMDD
+
+        Returns:
+            True表示是交易日，False表示非交易日
+        """
+        try:
+            # 获取年份用于缓存
+            year = date[:4]
+
+            # 如果该年份的交易日历未缓存，则获取
+            if year not in self.trade_cal_cache:
+                start_date = f"{year}0101"
+                end_date = f"{year}1231"
+
+                logger.debug(f"获取{year}年交易日历...")
+                df = self.pro.trade_cal(
+                    exchange='SSE',  # 上交所
+                    start_date=start_date,
+                    end_date=end_date,
+                    fields='cal_date,is_open'
+                )
+
+                if df is not None and not df.empty:
+                    # 将交易日存入缓存（字典：日期 -> 是否开市）
+                    self.trade_cal_cache[year] = dict(
+                        zip(df['cal_date'], df['is_open'])
+                    )
+                    logger.debug(f"{year}年交易日历已缓存，共{len(df)}天")
+                else:
+                    logger.warning(f"获取{year}年交易日历失败")
+                    return True  # 获取失败时默认返回True，继续执行
+
+            # 从缓存中查询
+            if year in self.trade_cal_cache:
+                is_open = self.trade_cal_cache[year].get(date, 0)
+                return bool(is_open == 1)
+            else:
+                # 缓存中没有，默认返回True
+                return True
+
+        except Exception as e:
+            logger.warning(f"判断交易日失败: {e}，默认视为交易日")
+            return True
 
     def fetch_stock_basic(self):
         """
@@ -71,12 +124,12 @@ class DataFetcher:
 
             if df is not None and not df.empty:
                 self.db.insert_stock_basic(df)
-                logger.info(f"成功更新 {len(df)} 只股票的基本信息")
+                logger.info(f"✅ 成功更新 {len(df)} 只股票的基本信息")
             else:
-                logger.warning("未获取到股票基本信息")
+                logger.warning("❌ 未获取到股票基本信息")
 
         except Exception as e:
-            logger.error(f"获取股票基本信息失败: {e}")
+            logger.error(f"❌ 获取股票基本信息失败: {e}")
 
     def fetch_daily_data(self, ts_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         """
@@ -106,7 +159,7 @@ class DataFetcher:
             return df
 
         except Exception as e:
-            logger.error(f"获取 {ts_code} 日线数据失败: {e}")
+            logger.error(f"❌ 获取 {ts_code} 日线数据失败: {e}")
             return None
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -125,6 +178,10 @@ class DataFetcher:
 
         # 创建副本避免修改原数据
         df_calc = df.copy()
+
+        # 转换日期格式为datetime（用于VWAP计算）
+        if 'trade_date' in df_calc.columns:
+            df_calc['trade_date'] = pd.to_datetime(df_calc['trade_date'], format='%Y%m%d')
 
         # 重命名字段以适配pandas_ta
         df_calc.rename(columns={
@@ -145,10 +202,20 @@ class DataFetcher:
 
             # 2. MACD指标
             macd = ta.macd(df_calc['Close'], fast=12, slow=26, signal=9)
-            if macd is not None:
-                df_calc['macd_dif'] = macd['MACD_12_26_9']
-                df_calc['macd_dea'] = macd['MACDs_12_26_9']
-                df_calc['macd_hist'] = macd['MACDh_12_26_9']
+            if macd is not None and not macd.empty:
+                # 查找MACD相关列（兼容不同版本）
+                macd_col = next((col for col in macd.columns if col.startswith('MACD_') and not col.startswith('MACDh_') and not col.startswith('MACDs_')), None)
+                macds_col = next((col for col in macd.columns if col.startswith('MACDs_')), None)
+                macdh_col = next((col for col in macd.columns if col.startswith('MACDh_')), None)
+
+                if macd_col and macds_col and macdh_col:
+                    df_calc['macd_dif'] = macd[macd_col]
+                    df_calc['macd_dea'] = macd[macds_col]
+                    df_calc['macd_hist'] = macd[macdh_col]
+                else:
+                    df_calc['macd_dif'] = None
+                    df_calc['macd_dea'] = None
+                    df_calc['macd_hist'] = None
 
             # 3. RSI指标
             df_calc['rsi'] = ta.rsi(df_calc['Close'], length=14)
@@ -156,23 +223,54 @@ class DataFetcher:
             # 4. KDJ指标
             stoch = ta.stoch(df_calc['High'], df_calc['Low'], df_calc['Close'],
                            k=9, d=3, smooth_k=3)
-            if stoch is not None:
-                df_calc['kdj_k'] = stoch['STOCHk_9_3_3']
-                df_calc['kdj_d'] = stoch['STOCHd_9_3_3']
-                # J = 3K - 2D
-                df_calc['kdj_j'] = 3 * df_calc['kdj_k'] - 2 * df_calc['kdj_d']
+            if stoch is not None and not stoch.empty:
+                # 查找STOCH相关列（兼容不同版本）
+                stochk_col = next((col for col in stoch.columns if col.startswith('STOCHk_')), None)
+                stochd_col = next((col for col in stoch.columns if col.startswith('STOCHd_')), None)
+
+                if stochk_col and stochd_col:
+                    df_calc['kdj_k'] = stoch[stochk_col]
+                    df_calc['kdj_d'] = stoch[stochd_col]
+                    # J = 3K - 2D
+                    df_calc['kdj_j'] = 3 * df_calc['kdj_k'] - 2 * df_calc['kdj_d']
+                else:
+                    df_calc['kdj_k'] = None
+                    df_calc['kdj_d'] = None
+                    df_calc['kdj_j'] = None
 
             # 5. CCI指标
             df_calc['cci'] = ta.cci(df_calc['High'], df_calc['Low'], df_calc['Close'], length=14)
 
             # 6. 布林带
             bbands = ta.bbands(df_calc['Close'], length=20, std=2)
-            if bbands is not None:
-                df_calc['boll_upper'] = bbands['BBU_20_2.0']
-                df_calc['boll_mid'] = bbands['BBM_20_2.0']
-                df_calc['boll_lower'] = bbands['BBL_20_2.0']
-                # 布林带宽度
-                df_calc['boll_width'] = (df_calc['boll_upper'] - df_calc['boll_lower']) / df_calc['boll_mid']
+            if bbands is not None and not bbands.empty:
+                # 兼容不同版本的pandas_ta列名
+                # 旧版本: BBU_20_2.0, BBM_20_2.0, BBL_20_2.0
+                # 新版本: BBU_20_2.0_2.0, BBM_20_2.0_2.0, BBL_20_2.0_2.0
+                upper_col = None
+                mid_col = None
+                lower_col = None
+
+                for col in bbands.columns:
+                    if col.startswith('BBU_'):
+                        upper_col = col
+                    elif col.startswith('BBM_'):
+                        mid_col = col
+                    elif col.startswith('BBL_'):
+                        lower_col = col
+
+                if upper_col and mid_col and lower_col:
+                    df_calc['boll_upper'] = bbands[upper_col]
+                    df_calc['boll_mid'] = bbands[mid_col]
+                    df_calc['boll_lower'] = bbands[lower_col]
+                    # 布林带宽度
+                    df_calc['boll_width'] = (df_calc['boll_upper'] - df_calc['boll_lower']) / df_calc['boll_mid']
+                else:
+                    logger.debug(f"布林带列名不匹配，实际列名: {bbands.columns.tolist()}")
+                    df_calc['boll_upper'] = None
+                    df_calc['boll_mid'] = None
+                    df_calc['boll_lower'] = None
+                    df_calc['boll_width'] = None
 
             # 7. ATR指标
             df_calc['atr'] = ta.atr(df_calc['High'], df_calc['Low'], df_calc['Close'], length=14)
@@ -184,21 +282,46 @@ class DataFetcher:
             df_calc['mfi'] = ta.mfi(df_calc['High'], df_calc['Low'],
                                    df_calc['Close'], df_calc['Volume'], length=14)
 
-            # 10. VWAP指标
-            df_calc['vwap'] = ta.vwap(df_calc['High'], df_calc['Low'],
-                                     df_calc['Close'], df_calc['Volume'])
+            # 10. VWAP指标 - 需要 DatetimeIndex
+            # 临时设置 trade_date 为索引以满足 VWAP 计算要求
+            if 'trade_date' in df_calc.columns:
+                df_temp = df_calc.set_index('trade_date', drop=False)
+                try:
+                    df_temp['vwap'] = ta.vwap(df_temp['High'], df_temp['Low'],
+                                             df_temp['Close'], df_temp['Volume'])
+                    df_calc['vwap'] = df_temp['vwap'].values
+                except Exception as e:
+                    logger.debug(f"VWAP计算失败: {e}")
+                    df_calc['vwap'] = None
+            else:
+                df_calc['vwap'] = None
 
             # 11. 量比（5日平均成交量比）
             vol_ma5 = ta.sma(df_calc['Volume'], length=5)
             df_calc['vol_ratio'] = df_calc['Volume'] / vol_ma5
 
+            # 11.5. VSA量价分析指标
+            # 成交量均线（20日）
+            df_calc['vma20'] = ta.sma(df_calc['Volume'], length=20)
+            # 成交量倍数（当前成交量相对VMA20）
+            df_calc['volume_multiple'] = df_calc['Volume'] / df_calc['vma20']
+            # 避免除零错误
+            df_calc['volume_multiple'] = df_calc['volume_multiple'].replace([float('inf'), -float('inf')], None)
+
             # 12. SAR指标
             sar = ta.psar(df_calc['High'], df_calc['Low'], df_calc['Close'])
-            if sar is not None:
-                df_calc['sar'] = sar['PSARl_0.02_0.2']  # 长仓SAR
-                # 如果长仓SAR为NaN，使用短仓SAR
-                sar_short = sar['PSARs_0.02_0.2']
-                df_calc['sar'] = df_calc['sar'].fillna(sar_short)
+            if sar is not None and not sar.empty:
+                # 查找PSAR相关列（兼容不同版本）
+                psarl_col = next((col for col in sar.columns if col.startswith('PSARl_')), None)
+                psars_col = next((col for col in sar.columns if col.startswith('PSARs_')), None)
+
+                if psarl_col and psars_col:
+                    df_calc['sar'] = sar[psarl_col]  # 长仓SAR
+                    # 如果长仓SAR为NaN，使用短仓SAR
+                    sar_short = sar[psars_col]
+                    df_calc['sar'] = df_calc['sar'].fillna(sar_short)
+                else:
+                    df_calc['sar'] = None
 
             # 准备返回的指标数据
             indicator_columns = [
@@ -207,17 +330,23 @@ class DataFetcher:
                 'macd_dif', 'macd_dea', 'macd_hist',
                 'rsi', 'kdj_k', 'kdj_d', 'kdj_j', 'cci',
                 'boll_upper', 'boll_mid', 'boll_lower', 'boll_width',
-                'obv', 'mfi', 'vwap', 'vol_ratio', 'atr', 'sar'
+                'obv', 'mfi', 'vwap', 'vol_ratio',
+                'vma20', 'volume_multiple',  # VSA量价分析指标
+                'atr', 'sar'
             ]
 
             # 只保留存在的列
             available_columns = [col for col in indicator_columns if col in df_calc.columns]
             result_df = df_calc[available_columns].copy()
 
+            # 将trade_date转换回字符串格式（YYYYMMDD）以便存储到数据库
+            if 'trade_date' in result_df.columns:
+                result_df['trade_date'] = result_df['trade_date'].dt.strftime('%Y%m%d')
+
             return result_df
 
         except Exception as e:
-            logger.error(f"计算技术指标失败: {e}")
+            logger.error(f"❌ 计算技术指标失败: {e}")
             return pd.DataFrame()
 
     def process_stock(self, ts_code: str, start_date: str, end_date: str,
@@ -239,6 +368,7 @@ class DataFetcher:
         # 1. 获取日线数据
         daily_df = self.fetch_daily_data(ts_code, start_date, end_date)
         if daily_df is None or daily_df.empty:
+            logger.warning(f"❌ {ts_code} 获取数据失败或无数据")
             return False
 
         # 2. 存储原始OHLCV数据
@@ -251,7 +381,7 @@ class DataFetcher:
         if not indicators_df.empty:
             self.db.insert_daily_indicators(indicators_df, replace=replace)
 
-        logger.info(f"✓ {ts_code} 数据处理完成 ({len(daily_df)} 条记录)")
+        logger.info(f"✅ {ts_code} 数据处理完成 ({len(daily_df)} 条记录)")
         return True
 
     def init_database(self, stock_codes: List[str], days: int = 365):
@@ -287,17 +417,17 @@ class DataFetcher:
                 time.sleep(0.15)
 
             except Exception as e:
-                logger.error(f"处理 {code} 时发生错误: {e}")
+                logger.error(f"❌ 处理 {code} 时发生错误: {e}")
                 failed_stocks.append(code)
                 continue
 
         # 4. 输出统计信息
         logger.info("\n" + "="*60)
         logger.info("初始化完成！")
-        logger.info(f"成功: {success_count} 只")
-        logger.info(f"失败: {len(failed_stocks)} 只")
+        logger.info(f"✅ 成功: {success_count} 只")
+        logger.info(f"❌ 失败: {len(failed_stocks)} 只")
         if failed_stocks:
-            logger.info(f"失败列表: {', '.join(failed_stocks)}")
+            logger.info(f"   失败列表: {', '.join(failed_stocks)}")
 
         # 5. 打印数据库统计
         stats = self.db.get_data_statistics()
@@ -326,7 +456,22 @@ class DataFetcher:
 
         logger.info(f"开始更新数据库，共 {len(stock_codes)} 只股票")
 
-        end_date = datetime.now().strftime('%Y%m%d')
+        # 确定结束日期：如果今天不是交易日，找到最近的交易日
+        today = datetime.now()
+        end_date = today.strftime('%Y%m%d')
+
+        # 向前查找最近的交易日（最多查找10天）
+        for i in range(10):
+            check_date = (today - timedelta(days=i)).strftime('%Y%m%d')
+            if self.is_trade_date(check_date):
+                end_date = check_date
+                if i > 0:
+                    logger.info(f"今天({today.strftime('%Y%m%d')})不是交易日，使用最近交易日: {end_date}")
+                break
+        else:
+            logger.warning("未找到最近的交易日，使用今天日期")
+            end_date = today.strftime('%Y%m%d')
+
         success_count = 0
         failed_stocks = []
 
@@ -337,7 +482,16 @@ class DataFetcher:
                     latest_date = self.db.get_latest_date(code)
                     if latest_date:
                         # 从最新日期的下一天开始更新
-                        start_date_dt = datetime.strptime(latest_date, '%Y%m%d') + timedelta(days=1)
+                        # 处理不同的日期格式（字符串或datetime对象）
+                        if isinstance(latest_date, str):
+                            # 如果是字符串，尝试解析（可能是YYYYMMDD或YYYY-MM-DD格式）
+                            if '-' in latest_date or ' ' in latest_date:
+                                start_date_dt = pd.to_datetime(latest_date) + timedelta(days=1)
+                            else:
+                                start_date_dt = datetime.strptime(latest_date, '%Y%m%d') + timedelta(days=1)
+                        else:
+                            # 如果已是datetime对象
+                            start_date_dt = latest_date + timedelta(days=1)
                         start_date = start_date_dt.strftime('%Y%m%d')
 
                         # 如果已是最新，跳过（只有当起始日期大于结束日期时才跳过）
@@ -363,17 +517,17 @@ class DataFetcher:
                 time.sleep(0.15)
 
             except Exception as e:
-                logger.error(f"更新 {code} 时发生错误: {e}")
+                logger.error(f"❌ 更新 {code} 时发生错误: {e}")
                 failed_stocks.append(code)
                 continue
 
         # 输出统计
         logger.info("\n" + "="*60)
         logger.info("更新完成！")
-        logger.info(f"成功: {success_count} 只")
-        logger.info(f"失败: {len(failed_stocks)} 只")
+        logger.info(f"✅ 成功: {success_count} 只")
+        logger.info(f"❌ 失败: {len(failed_stocks)} 只")
         if failed_stocks:
-            logger.info(f"失败列表: {', '.join(failed_stocks)}")
+            logger.info(f"   失败列表: {', '.join(failed_stocks)}")
 
         stats = self.db.get_data_statistics()
         logger.info(f"\n数据库总记录: {stats.get('ohlcv_records', 0)} 条")

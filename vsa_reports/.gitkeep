@@ -1,0 +1,24 @@
+# VSA扫描报告目录
+
+此目录用于存储 VSA Scanner 生成的扫描报告。
+
+所有报告文件将自动保存在此目录中，格式为：
+vsa_summary_YYYYMMDD_HHMMSS.txt
+
+例如：vsa_summary_20251108_230331.txt
+
+## 使用说明
+
+运行 VSA Scanner 扫描股票池：
+```bash
+python scripts/vsa_scanner.py --pool pool/stock_pool_small.txt
+```
+
+扫描完成后，详细报告会自动保存到此目录。
+
+报告包含：
+- 核心摘要表格（全部信号，按风险回报比排序）
+- 完整信号列表（每个信号的详细信息）
+- 统计分析（4个维度）
+- 扫描覆盖统计
+- 风险提示

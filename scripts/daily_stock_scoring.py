@@ -16,6 +16,7 @@ import pandas_ta as ta
 import numpy as np
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -35,10 +36,17 @@ try:
 except ImportError:
     LOCAL_DB_AVAILABLE = False
 
+# 导入VSA模块
+try:
+    from analysis.vsa_signals import VSASignalDetector
+    VSA_AVAILABLE = True
+except ImportError:
+    VSA_AVAILABLE = False
+
 # ==================== 全局配置 ====================
 
-# 输出目录
-OUTPUT_DIR = 'daily_scoring_results'
+# 输出目录 - 使用项目根目录的绝对路径
+OUTPUT_DIR = os.path.join(project_root, 'daily_scoring_results')
 
 # 日志配置
 logging.basicConfig(
@@ -62,21 +70,32 @@ class StockScoringAnalyzer:
     整合 advanced_technical_analysis.py 的完整打分系统
     """
 
-    def __init__(self, ts_token=None, use_local_db=False):
+    def __init__(self, ts_token=None, use_local_db=False, suppress_logs=False):
         """
         初始化分析器
 
         Args:
             ts_token: Tushare token，如果为None则从token.txt读取
             use_local_db: 是否使用本地数据库，默认False（使用在线Tushare）
+            suppress_logs: 是否禁用日志输出，默认False
         """
         self.use_local_db = use_local_db and LOCAL_DB_AVAILABLE
         self.local_query = None
+        self.suppress_logs = suppress_logs
+
+        # VSA检测器使用懒加载，避免多进程序列化问题
+        self._vsa_detector = None
+        if VSA_AVAILABLE and not suppress_logs:
+            logger.info("VSA量价分析模块可用")
 
         if self.use_local_db:
-            # 使用本地数据库
+            # 使用本地数据库（禁用数据库模块的日志）
+            if suppress_logs:
+                logging.getLogger('database.db_manager').setLevel(logging.WARNING)
+                logging.getLogger('database.query_helper').setLevel(logging.WARNING)
             self.local_query = StockDataQuery()
-            logger.info("使用本地数据库作为数据源")
+            if not suppress_logs:
+                logger.info("使用本地数据库作为数据源")
         else:
             # 读取 Tushare token
             if ts_token is None:
@@ -97,7 +116,8 @@ class StockScoringAnalyzer:
             # 初始化 Tushare
             ts.set_token(ts_token)
             self.pro = ts.pro_api()
-            logger.info("使用在线Tushare作为数据源")
+            if not suppress_logs:
+                logger.info("使用在线Tushare作为数据源")
 
         # 技术指标参数配置
         self.params = {
@@ -116,6 +136,13 @@ class StockScoringAnalyzer:
             'sar_acceleration': 0.02,
             'sar_maximum': 0.2
         }
+
+    @property
+    def vsa_detector(self):
+        """懒加载VSA检测器，避免多进程序列化问题"""
+        if VSA_AVAILABLE and self._vsa_detector is None:
+            self._vsa_detector = VSASignalDetector()
+        return self._vsa_detector
 
     def fetch_data(self, stock_code, start_date, end_date):
         """获取股票数据"""
@@ -269,13 +296,22 @@ class StockScoringAnalyzer:
             length=self.params['mfi_period']
         )
 
-        # VWAP
-        df['VWAP'] = ta.vwap(
-            df['High'],
-            df['Low'],
-            df['Close'],
-            df['Volume']
-        )
+        # VWAP - 需要 DatetimeIndex
+        # 临时设置 trade_date 为索引以满足 VWAP 计算要求
+        if 'trade_date' in df.columns:
+            df_temp = df.set_index('trade_date', drop=False)
+            df_temp['VWAP'] = ta.vwap(
+                df_temp['High'],
+                df_temp['Low'],
+                df_temp['Close'],
+                df_temp['Volume']
+            )
+            # 将 VWAP 结果复制回原 DataFrame
+            df['VWAP'] = df_temp['VWAP'].values
+        else:
+            # 如果没有 trade_date 列，跳过 VWAP 计算
+            logger.warning("缺少 trade_date 列，跳过 VWAP 计算")
+            df['VWAP'] = np.nan
 
         return df
 
@@ -400,6 +436,8 @@ class StockScoringAnalyzer:
         df['Volatility_Score'] = 0
         df['Volume_Score'] = 0
         df['Pattern_Score'] = 0
+        df['VSA_Score'] = 0  # VSA量价分析得分
+        df['VSA_Signal'] = ''  # VSA信号类型
         df['Total_Score'] = 0
         df['Score_Details'] = ''
 
@@ -410,6 +448,7 @@ class StockScoringAnalyzer:
             volatility_score = 0
             volume_score = 0
             pattern_score = 0
+            vsa_score = 0  # VSA得分
             score_details = []
 
             # ==================== 趋势类打分 ====================
@@ -644,6 +683,57 @@ class StockScoringAnalyzer:
                     volume_score += 1
                     score_details.append('MFI超买但OBV上升(+1)')
 
+            # ==================== VSA量价分析打分 ====================
+            # 基于纯量价关系的信号检测，不依赖传统指标
+            if self.vsa_detector and 'volume_multiple' in df.columns and pd.notna(df.loc[i, 'volume_multiple']):
+                # 准备当前K线数据
+                row_data = pd.Series({
+                    'open': df.loc[i, 'Open'],
+                    'high': df.loc[i, 'High'],
+                    'low': df.loc[i, 'Low'],
+                    'close': df.loc[i, 'Close'],
+                    'volume_multiple': df.loc[i, 'volume_multiple']
+                })
+
+                # 获取前一日收盘价
+                prev_close = df.loc[i-1, 'Close'] if i > 0 else None
+
+                # 检测VSA信号
+                signal, strength, description = self.vsa_detector.detect_signal(row_data, prev_close)
+
+                # 根据信号类型打分
+                if signal == VSASignalDetector.HEALTHY_UP:
+                    # 价涨量增：健康上涨，强烈买入信号
+                    vsa_score += strength  # 1-3分
+                    score_details.append(f'VSA:{description}(+{strength})')
+                    df.loc[i, 'VSA_Signal'] = signal
+
+                elif signal == VSASignalDetector.SUPPLY_DRY_UP:
+                    # 价跌量缩：供应枯竭，关键买入信号
+                    vsa_score += strength  # 2-3分
+                    score_details.append(f'VSA:{description}(+{strength})')
+                    df.loc[i, 'VSA_Signal'] = signal
+
+                elif signal == VSASignalDetector.WEAK_UP:
+                    # 价涨量缩：无量空涨，警告信号
+                    vsa_score -= 1
+                    score_details.append(f'VSA:{description}(-1)')
+                    df.loc[i, 'VSA_Signal'] = signal
+
+                elif signal == VSASignalDetector.PANIC_SELL:
+                    # 价跌量增：恐慌抛售
+                    vsa_score -= strength  # -1到-3分
+                    score_details.append(f'VSA:{description}(-{strength})')
+                    df.loc[i, 'VSA_Signal'] = signal
+
+                elif signal == VSASignalDetector.ABSORPTION_BAR:
+                    # 价平量增：吸筹或派发，需结合趋势判断
+                    # 暂时保持中性，不加减分
+                    score_details.append(f'VSA:{description}(0)')
+                    df.loc[i, 'VSA_Signal'] = signal
+
+                df.loc[i, 'VSA_Score'] = vsa_score
+
             # ==================== 形态类打分 ====================
 
             # 1. 背离打分
@@ -720,7 +810,8 @@ class StockScoringAnalyzer:
             df.loc[i, 'Volatility_Score'] = volatility_score
             df.loc[i, 'Volume_Score'] = volume_score
             df.loc[i, 'Pattern_Score'] = pattern_score
-            df.loc[i, 'Total_Score'] = trend_score + momentum_score + volatility_score + volume_score + pattern_score
+            df.loc[i, 'VSA_Score'] = vsa_score
+            df.loc[i, 'Total_Score'] = trend_score + momentum_score + volatility_score + volume_score + pattern_score + vsa_score
             df.loc[i, 'Score_Details'] = '; '.join(score_details)
 
         return df
@@ -802,8 +893,8 @@ def analyze_single_stock(args):
     stock_code, stock_name, start_date, end_date, use_local_db = args
 
     try:
-        # 创建分析器实例
-        analyzer = StockScoringAnalyzer(use_local_db=use_local_db)
+        # 创建分析器实例（禁用日志输出）
+        analyzer = StockScoringAnalyzer(use_local_db=use_local_db, suppress_logs=True)
 
         # 获取数据
         df = analyzer.fetch_data(stock_code, start_date, end_date)
@@ -1049,11 +1140,10 @@ def generate_comprehensive_report(results, output_file, analysis_date=None):
         f.write("-" * 100 + "\n")
 
         for idx, r in enumerate(results_sorted, 1):
-            # 提取前3个得分明细
-            details_list = r['score_details'].split('; ')
-            details_str = '; '.join(details_list)
-            # if len(details_list) < len(r['score_details'].split('; ')):
-            #     details_str += '...'
+            # 限制明细长度，避免输出过长
+            details_str = r['score_details']
+            if len(details_str) > 200:
+                details_str = details_str[:200] + '...'
 
             f.write(f"{idx:<6}{r['code']:<12}{r['name']:<10}{r['total_score']:>+6.0f}  "
                    f"{r['close']:>8.2f}  {r['change_pct']:>+7.2f}%  "
@@ -1373,20 +1463,29 @@ def main():
 
     # 多进程批量处理
     results = []
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
-        futures = {executor.submit(analyze_single_stock, task): task[0] for task in tasks}
+    failed_count = 0
 
-        for future in as_completed(futures):
-            stock_code = futures[future]
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-                    logger.info(f"✓ {stock_code} {result['name']} | 总分: {result['total_score']:+.0f}")
-                else:
-                    logger.warning(f"✗ {stock_code} | 分析失败")
-            except Exception as e:
-                logger.error(f"✗ {stock_code} | 异常: {e}")
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = {executor.submit(analyze_single_stock, task): task for task in tasks}
+
+        # 使用 tqdm 显示进度条
+        with tqdm(total=len(tasks), desc="分析进度", unit="只", ncols=100) as pbar:
+            for future in as_completed(futures):
+                task = futures[future]
+                stock_code, stock_name = task[0], task[1]
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                        pbar.set_postfix_str(f"{stock_code} {stock_name[:4]} 分:{result['total_score']:+.0f}")
+                    else:
+                        failed_count += 1
+                        pbar.set_postfix_str(f"失败: {stock_code}")
+                except Exception as e:
+                    failed_count += 1
+                    pbar.set_postfix_str(f"异常: {stock_code}")
+
+                pbar.update(1)
 
     # 生成报告
     if results:
@@ -1399,18 +1498,20 @@ def main():
                                      analysis_date=end_date if args.use_local_db else None)
 
         # CSV汇总
-        csv_file = os.path.join(output_dir, f'daily_scoring_summary_{timestamp}.csv')
-        save_csv_summary(results, csv_file)
+        # csv_file = os.path.join(output_dir, f'daily_scoring_summary_{timestamp}.csv')
+        # save_csv_summary(results, csv_file)
 
         logger.info(f"\n{'='*50}")
         logger.info(f"批量分析完成！")
         logger.info(f"成功分析: {len(results)}/{len(filtered_stocks)} 只股票")
+        if failed_count > 0:
+            logger.info(f"失败/异常: {failed_count} 只股票")
         if args.use_local_db:
             logger.info(f"分析基准日期: {end_date}")
             if len(filtered_stocks) < len(stocks):
                 logger.info(f"排除股票: {len(stocks) - len(filtered_stocks)} 只（数据未更新到最新日期）")
         logger.info(f"详细报告: {txt_file}")
-        logger.info(f"CSV汇总: {csv_file}")
+        #logger.info(f"CSV汇总: {csv_file}")
         logger.info(f"{'='*50}")
     else:
         logger.error("没有成功分析的股票，无法生成报告")

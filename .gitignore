@@ -5,6 +5,10 @@
 *.txt
 stock_data.db
 
+# Ignore VSA reports directory
+vsa_reports/*.txt
+!vsa_reports/.gitkeep
+
 # Ignore JSON files
 *.json
 

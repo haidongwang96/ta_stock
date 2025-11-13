@@ -74,21 +74,21 @@
 
 ```bash
 # 初始化数据库，导入 stock_pool_example.txt 中的所有股票，获取最近1年数据
-python database/fetch_data_to_db.py --init --days 365
+python3 database/fetch_data_to_db.py --init --days 365
 ```
 
 **方式二：指定股票池文件**
 
 ```bash
 # 使用自定义股票池
-python database/fetch_data_to_db.py --init --pool my_stocks.txt --days 365
+python3 database/fetch_data_to_db.py --init --pool  --days 365
 ```
 
 **方式三：指定股票代码**
 
 ```bash
 # 只初始化特定股票
-python database/fetch_data_to_db.py --init --codes "688256.SH,603893.SH,300502.SZ" --days 365
+python3 database/fetch_data_to_db.py --init --codes "688256.SH,603893.SH,300502.SZ" --days 365
 ```
 
 > **⏱️ 预计耗时**：120只股票约需要 **3-5分钟**（取决于网络和API限速）

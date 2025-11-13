@@ -115,6 +115,9 @@ class StockDatabase:
                 mfi REAL,
                 vwap REAL,
                 vol_ratio REAL,
+                -- VSA量价分析指标
+                vma20 REAL,
+                volume_multiple REAL,
                 -- 波动率
                 atr REAL,
                 -- 趋势指标
@@ -122,6 +125,21 @@ class StockDatabase:
                 UNIQUE(ts_code, trade_date)
             )
         ''')
+
+        # 为已存在的表添加新字段（如果字段不存在）
+        try:
+            cursor.execute("ALTER TABLE daily_indicators ADD COLUMN vma20 REAL")
+            logger.info("成功添加vma20字段")
+        except sqlite3.OperationalError:
+            # 字段已存在，忽略
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE daily_indicators ADD COLUMN volume_multiple REAL")
+            logger.info("成功添加volume_multiple字段")
+        except sqlite3.OperationalError:
+            # 字段已存在，忽略
+            pass
 
         # 4. 滚动窗口打分数据表
         cursor.execute('''
