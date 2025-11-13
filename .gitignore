@@ -22,3 +22,5 @@ vsa_reports/*.txt
 
 
 **__pycache__**
+
+*.html
