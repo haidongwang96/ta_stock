@@ -3,6 +3,7 @@
 
 # Ignore text files
 *.txt
+!pool/**/*.txt
 stock_data.db
 
 # Ignore VSA reports directory
@@ -24,3 +25,4 @@ vsa_reports/*.txt
 **__pycache__**
 
 *.html
+
