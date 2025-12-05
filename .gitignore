@@ -23,6 +23,6 @@ vsa_reports/*.txt
 
 
 **__pycache__**
-
+*.pyc
 *.html
 
