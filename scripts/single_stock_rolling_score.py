@@ -977,8 +977,8 @@ def main():
                        help='窗口数量（默认30个交易日）')
     parser.add_argument('--indicator-window', type=int, default=60,
                        help='指标计算窗口（默认60天，建议不小于60）')
-    parser.add_argument('--use-local-db', action='store_true',
-                       help='使用本地数据库，速度更快（默认使用在线Tushare，需要配置database模块）')
+    parser.add_argument('--db', dest='use_local_db', action='store_true',
+                       help='使用本地数据库），速度更快（默认使用在线Tushare，需要配置database模块）')
     parser.add_argument('--output-dir', type=str, default=OUTPUT_DIR,
                        help=f'输出目录（默认: {OUTPUT_DIR}）')
 

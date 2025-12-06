@@ -1420,7 +1420,8 @@ def main():
     parser.add_argument('--report_days', type=int, default=20, help='报告中显示最近N天的信号，默认20天')
     parser.add_argument('--pool', type=str, help='从股票池文件读取股票代码进行批量分析')
     parser.add_argument('--batch', action='store_true', help='批量分析模式，分析股票池中的所有股票')
-    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
+    parser.add_argument('--db', dest='use_local_db', action='store_true',
+                       help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 

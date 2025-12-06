@@ -117,10 +117,10 @@ python scripts/vsa_scanner.py --pool my_stocks.txt --output vsa_signals.csv
 
 ```bash
 # 使用本地数据库
-python scripts/daily_stock_scoring.py --use-local-db
+python scripts/daily_stock_scoring.py --db
 
 # 指定股票池
-python scripts/daily_stock_scoring.py --use-local-db --stock-pool my_stocks.txt
+python scripts/daily_stock_scoring.py --db --stock-pool my_stocks.txt
 ```
 
 评分报告中会新增：
@@ -225,7 +225,7 @@ python test_vsa_framework.py
    python scripts/vsa_scanner.py --pool my_stocks.txt --output today_signals.csv
 
    # 查看综合评分
-   python scripts/daily_stock_scoring.py --use-local-db --stock-pool my_stocks.txt
+   python scripts/daily_stock_scoring.py --db --stock-pool my_stocks.txt
    ```
 
 3. **盘中（根据信号择机入场）**

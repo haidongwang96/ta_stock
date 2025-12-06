@@ -1,1 +1,1 @@
-python3 scripts/daily_stock_scoring.py --pool pool/stock_pool_all.txt --use-local-db
+python3 scripts/daily_stock_scoring.py --pool pool/stock_pool_all.txt --db

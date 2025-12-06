@@ -114,16 +114,17 @@ python3 scripts/technical_analysis.py --code 688256.SH --days 60 --use-local-db
 ```bash
 # 使用本地数据库分析股票池
 python3 batch_technical_analysis.py --pool stock_pool_example.txt --use-local-db
+python3 batch_technical_analysis.py --pool stock_pool_example.txt --db
 ```
 
 #### 高级技术分析
 
 ```bash
 # 单个股票高级分析
-python3 scripts/advanced_technical_analysis.py --code 688256.SH --days 120 --use-local-db
+python scripts/advanced_technical_analysis.py --code 600519.SH --days 120 --db
 
 # 批量分析股票池
-python3 scripts/advanced_technical_analysis.py --pool pool/stock_pool_example.txt --batch --use-local-db
+python3 scripts/advanced_technical_analysis.py --pool pool/stock_pool_example.txt --batch --db
 ```
 
 #### 每日打分排名 ⭐ 智能日期对齐

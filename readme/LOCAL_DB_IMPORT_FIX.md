@@ -77,7 +77,7 @@ from database.query_helper import StockDataQuery
 
 ```bash
 # 当前目录: /Users/xxx/stock/ta_stock/
-python scripts/single_stock_rolling_score.py --code 000737.SZ --use-local-db
+python scripts/daily_stock_scoring.py --pool pool/stock_pool_all.txt --workers 4 --db
 ```
 
 **优点**：

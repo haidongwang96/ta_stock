@@ -1416,7 +1416,7 @@ def main():
     parser.add_argument('--days', type=int, default=60, help='获取历史数据天数，默认60天')
     parser.add_argument('--workers', type=int, default=4, help='并发进程数，默认4')
     parser.add_argument('--output_dir', type=str, default=None, help='输出目录，默认 daily_scoring_results')
-    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
+    parser.add_argument('--db', dest='use_local_db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 

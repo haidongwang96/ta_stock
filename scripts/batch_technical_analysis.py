@@ -583,7 +583,8 @@ def main():
                        choices=['score', 'mfi', 'pct_5d', 'pct_10d', 'volume_ratio'],
                        help='排序依据，默认按综合得分排序')
     parser.add_argument('--create-sample', action='store_true', help='创建示例股票池文件')
-    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
+    parser.add_argument('--db', dest='use_local_db', action='store_true',
+                       help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 

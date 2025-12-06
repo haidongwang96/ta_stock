@@ -488,7 +488,8 @@ def main():
     parser.add_argument('--days', type=int, help='分析最近N天的数据，默认60天（如果同时指定了--start，则优先使用--start）')
     parser.add_argument('--output', type=str, help='保存结果到CSV文件')
     parser.add_argument('--pool', type=str, help='从股票池文件读取第一个股票代码进行分析')
-    parser.add_argument('--use-local-db', action='store_true', help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
+    parser.add_argument('--db', dest='use_local_db', action='store_true',
+                       help='使用本地数据库而非在线Tushare（需要先初始化数据库）')
 
     args = parser.parse_args()
 

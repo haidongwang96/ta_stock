@@ -788,7 +788,7 @@ def main():
     # 可选参数
     parser.add_argument('--pool', type=str,
                        help='股票池文件路径')
-    parser.add_argument('--use-local-db', action='store_true',
+    parser.add_argument('--db', dest='use_local_db', action='store_true',
                        help='使用本地数据库')
     parser.add_argument('--output-dir', type=str,
                        help='输出目录')

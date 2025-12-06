@@ -17,7 +17,7 @@
 python scripts/single_stock_rolling_score.py \
     --code 000002.SZ \
     --name 万科A \
-    --use-local-db \
+    --db \
     --num-windows 30
 ```
 
@@ -41,7 +41,7 @@ python scripts/single_stock_rolling_score.py \
 # 相同命令
 python scripts/single_stock_rolling_score.py \
     --code 000002.SZ \
-    --use-local-db \
+    --db \
     --num-windows 30
 ```
 
@@ -90,7 +90,7 @@ python scripts/single_stock_rolling_score.py \
 ```bash
 python scripts/single_stock_rolling_score.py \
     --code 000002.SZ \
-    --use-local-db \
+    --db \
     --force-recalculate
 ```
 
@@ -103,7 +103,7 @@ python scripts/single_stock_rolling_score.py \
 ```bash
 python scripts/single_stock_rolling_score.py \
     --code 000002.SZ \
-    --use-local-db \
+    --db \
     --clear-cache
 ```
 
@@ -206,7 +206,7 @@ python scripts/single_stock_rolling_score.py \
 ## 常见问题
 
 **Q: 为什么第二次运行还是很慢？**
-A: 检查是否忘记添加 `--use-local-db` 参数，或者检查数据库仓库是否初始化成功
+A: 检查是否忘记添加 `--db` 参数，或者检查数据库仓库是否初始化成功
 
 **Q: 如何批量清除所有股票的缓存？**
 A: 可以直接删除数据库中的表：

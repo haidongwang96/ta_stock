@@ -393,8 +393,9 @@ def main():
     # 其他选项
     parser.add_argument('--name', type=str, default='',
                        help='股票名称（配合--code使用）')
-    parser.add_argument('--use-local-db', action='store_true', default=True,
-                       help='使用本地数据库（默认）')
+
+    parser.add_argument('--db', dest='use_local_db', action='store_true',
+                       help='使用本地数据库')
     parser.add_argument('--use-tushare', action='store_true',
                        help='使用Tushare在线数据')
     parser.add_argument('--test', action='store_true',

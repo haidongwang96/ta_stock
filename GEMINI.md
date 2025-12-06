@@ -92,7 +92,7 @@ This is the most common use case for a detailed look at one stock.
 ./run_advanced_analysis.sh -c 688256.SH
 
 # Or directly with Python, using the local database
-python advanced_technical_analysis.py --code 688256.SH --use-local-db
+python advanced_technical_analysis.py --code 688256.SH --db
 ```
 
 **Daily Scoring (Batch Analysis)**
@@ -100,7 +100,7 @@ Analyzes all stocks in a pool for daily monitoring.
 
 ```bash
 # Analyzes all stocks in pool.txt using 4 parallel processes and the local DB
-python daily_stock_scoring.py --pool pool.txt --workers 4 --use-local-db
+python daily_stock_scoring.py --pool pool.txt --workers 4 --db
 ```
 
 **Rolling Score Analysis (Single Stock Deep Dive)**
@@ -108,7 +108,7 @@ Generates a historical score trend and charts for one stock.
 
 ```bash
 # Analyze the last 90 days of scores for a stock using the local DB
-python single_stock_rolling_score.py --code 688256.SH --num-windows 90 --use-local-db
+python single_stock_rolling_score.py --code 688256.SH --num-windows 90 --db
 ```
 
 ---
@@ -120,4 +120,4 @@ python single_stock_rolling_score.py --code 688256.SH --num-windows 90 --use-loc
 - **Command-Line Interface:** All scripts use Python's `argparse` module to provide a clear and consistent command-line interface.
 - **Logging:** The `logging` module is used to provide informative output about the script's progress and potential errors.
 - **Organized Output:** Each script saves its output (CSV, TXT, PNG) to a dedicated directory (e.g., `advanced_analysis_results/`, `daily_scoring_results/`), keeping the root directory clean.
-- **Data Source Abstraction:** The analysis scripts can seamlessly switch between the online Tushare API and the local SQLite database via the `--use-local-db` flag.
+- **Data Source Abstraction:** The analysis scripts can seamlessly switch between the online Tushare API and the local SQLite database via the `--db` flag.

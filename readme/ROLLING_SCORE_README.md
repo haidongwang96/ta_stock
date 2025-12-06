@@ -27,7 +27,7 @@ python scripts/single_stock_rolling_score.py --code 000001.SZ --name 平安银�
 ### 方式二：使用本地数据库（推荐）⭐
 
 ```bash
-python scripts/single_stock_rolling_score.py --code 000001.SZ --name 平安银行 --use-local-db
+python scripts/single_stock_rolling_score.py --code 600519.SH --num-windows 60 --db
 ```
 
 **优点**：
