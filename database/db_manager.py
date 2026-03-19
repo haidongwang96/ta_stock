@@ -17,6 +17,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DAILY_BASIC_FIELDS = [
+    'turnover_rate',
+    'turnover_rate_f',
+    'volume_ratio',
+    'pe',
+    'pe_ttm',
+    'pb',
+    'ps',
+    'ps_ttm',
+    'dv_ratio',
+    'dv_ttm',
+    'total_share',
+    'float_share',
+    'free_share',
+    'total_mv',
+    'circ_mv',
+]
+
+DAILY_BASIC_REQUIRED_FIELDS = [
+    'turnover_rate',
+    'turnover_rate_f',
+    'volume_ratio',
+    'total_share',
+    'float_share',
+    'free_share',
+    'total_mv',
+    'circ_mv',
+]
+
 
 class StockDatabase:
     """股票数据库管理类"""
@@ -42,10 +71,71 @@ class StockDatabase:
         """建立数据库连接"""
         try:
             self.conn = sqlite3.connect(self.db_path)
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA cache_size=-20000")
+            self.conn.execute("PRAGMA temp_store=MEMORY")
             logger.info(f"数据库连接成功: {self.db_path}")
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
             raise
+
+    def _stock_basic_needs_migration(self) -> bool:
+        """检查 stock_basic 是否缺少主键约束。"""
+        cursor = self.conn.execute("PRAGMA table_info(stock_basic)")
+        table_info = cursor.fetchall()
+        if not table_info:
+            return False
+
+        ts_code_rows = [row for row in table_info if row[1] == 'ts_code']
+        if not ts_code_rows:
+            return True
+
+        return ts_code_rows[0][5] != 1
+
+    def _migrate_stock_basic_schema(self):
+        """将旧的 stock_basic 表迁移为带主键约束的结构。"""
+        if not self._stock_basic_needs_migration():
+            return
+
+        cursor = self.conn.cursor()
+        logger.info("检测到 stock_basic 缺少主键约束，开始迁移表结构")
+
+        cursor.execute("ALTER TABLE stock_basic RENAME TO stock_basic_old")
+        cursor.execute('''
+            CREATE TABLE stock_basic (
+                ts_code TEXT PRIMARY KEY,
+                symbol TEXT,
+                name TEXT,
+                area TEXT,
+                industry TEXT,
+                market TEXT,
+                list_date TEXT,
+                update_time TEXT
+            )
+        ''')
+        cursor.execute('''
+            INSERT OR REPLACE INTO stock_basic (
+                ts_code, symbol, name, area, industry, market, list_date, update_time
+            )
+            SELECT
+                ts_code, symbol, name, area, industry, market, list_date, update_time
+            FROM stock_basic_old
+            WHERE ts_code IS NOT NULL
+            ORDER BY rowid
+        ''')
+        cursor.execute("DROP TABLE stock_basic_old")
+        self.conn.commit()
+        logger.info("stock_basic 表结构迁移完成")
+
+    def _drop_redundant_indexes(self):
+        """删除与 UNIQUE 约束重复的复合索引，降低写入开销。"""
+        redundant_indexes = [
+            "idx_daily_ohlcv_code_date",
+            "idx_daily_indicators_code_date",
+        ]
+        for index_name in redundant_indexes:
+            self.conn.execute(f"DROP INDEX IF EXISTS {index_name}")
 
     def _create_tables(self):
         """创建所有必需的表"""
@@ -64,6 +154,7 @@ class StockDatabase:
                 update_time TEXT
             )
         ''')
+        self._migrate_stock_basic_schema()
 
         # 2. 日线OHLCV原始数据表
         cursor.execute('''
@@ -80,6 +171,21 @@ class StockDatabase:
                 pct_chg REAL,
                 vol REAL,
                 amount REAL,
+                turnover_rate REAL,
+                turnover_rate_f REAL,
+                volume_ratio REAL,
+                pe REAL,
+                pe_ttm REAL,
+                pb REAL,
+                ps REAL,
+                ps_ttm REAL,
+                dv_ratio REAL,
+                dv_ttm REAL,
+                total_share REAL,
+                float_share REAL,
+                free_share REAL,
+                total_mv REAL,
+                circ_mv REAL,
                 UNIQUE(ts_code, trade_date)
             )
         ''')
@@ -141,6 +247,14 @@ class StockDatabase:
             # 字段已存在，忽略
             pass
 
+        # 为 daily_ohlcv 添加 daily_basic 扩展字段（兼容旧数据库）
+        for field in DAILY_BASIC_FIELDS:
+            try:
+                cursor.execute(f"ALTER TABLE daily_ohlcv ADD COLUMN {field} REAL")
+                logger.info(f"成功添加{field}字段")
+            except sqlite3.OperationalError:
+                pass
+
         # 4. 滚动窗口打分数据表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS rolling_scores (
@@ -178,18 +292,8 @@ class StockDatabase:
 
         # 创建索引以提高查询性能
         cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_code_date
-            ON daily_ohlcv(ts_code, trade_date)
-        ''')
-
-        cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_date
             ON daily_ohlcv(trade_date)
-        ''')
-
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_daily_indicators_code_date
-            ON daily_indicators(ts_code, trade_date)
         ''')
 
         cursor.execute('''
@@ -207,6 +311,7 @@ class StockDatabase:
             ON rolling_scores(trade_date)
         ''')
 
+        self._drop_redundant_indexes()
         self.conn.commit()
         logger.info("数据表创建/检查完成")
 
@@ -220,10 +325,11 @@ class StockDatabase:
         stock_info['update_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         try:
+            self.conn.execute("DELETE FROM stock_basic")
             stock_info.to_sql(
                 'stock_basic',
                 self.conn,
-                if_exists='replace',
+                if_exists='append',
                 index=False,
                 method='multi'
             )
@@ -488,6 +594,33 @@ class StockDatabase:
             return (result[0], result[1]) if result else (None, None)
         except Exception as e:
             logger.error(f"查询日期范围失败: {e}")
+            return (None, None)
+
+    def get_missing_daily_basic_range(self, ts_code: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        获取指定股票中缺失 daily_basic 必填扩展字段的数据范围。
+
+        Args:
+            ts_code: 股票代码
+
+        Returns:
+            (最早缺失日期, 最晚缺失日期) 元组；如果不存在缺失值则返回 (None, None)
+        """
+        try:
+            missing_conditions = " OR ".join(
+                f"{field} IS NULL" for field in DAILY_BASIC_REQUIRED_FIELDS
+            )
+            query = """
+                SELECT MIN(trade_date) as min_date, MAX(trade_date) as max_date
+                FROM daily_ohlcv
+                WHERE ts_code = ?
+                  AND ({missing_conditions})
+            """.format(missing_conditions=missing_conditions)
+            cursor = self.conn.execute(query, (ts_code,))
+            result = cursor.fetchone()
+            return (result[0], result[1]) if result and result[0] else (None, None)
+        except Exception as e:
+            logger.error(f"查询缺失daily_basic必填字段区间失败 ({ts_code}): {e}")
             return (None, None)
 
     def delete_stock_data(self, ts_code: str):

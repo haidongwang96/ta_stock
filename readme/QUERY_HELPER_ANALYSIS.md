@@ -1,5 +1,10 @@
 # database/query_helper.py 代码分析报告
 
+> 注：本文档的测试环境与统计数据是历史快照。当前实现已经随 `db_manager.py` 的演进发生两点重要变化：
+> 1. `StockDatabase` 连接默认启用 `WAL` + `synchronous=NORMAL`
+> 2. `query_helper.daily()` 透传的 `daily_ohlcv` 字段现在除 OHLCV 外，还可能包含 `daily_basic` 扩展字段
+>    （如 `turnover_rate`、`pe_ttm`、`total_mv`、`circ_mv` 等）
+
 ## 📊 整体评估
 
 **评级**: ⭐⭐⭐⭐⭐ (5/5)

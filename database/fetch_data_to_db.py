@@ -16,7 +16,7 @@ from typing import List, Optional
 
 # 添加父目录到系统路径
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from database.db_manager import StockDatabase
+from database.db_manager import DAILY_BASIC_FIELDS, StockDatabase
 
 # 配置日志
 logging.basicConfig(
@@ -24,6 +24,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+DAILY_BASIC_FETCH_FIELDS = ['ts_code', 'trade_date', *DAILY_BASIC_FIELDS]
 
 
 class DataFetcher:
@@ -133,7 +135,7 @@ class DataFetcher:
 
     def fetch_daily_data(self, ts_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         """
-        从Tushare获取日线数据
+        从Tushare获取日线数据，并合并 daily_basic 扩展字段
 
         Args:
             ts_code: 股票代码
@@ -141,7 +143,7 @@ class DataFetcher:
             end_date: 结束日期 YYYYMMDD
 
         Returns:
-            包含日线数据的DataFrame
+            包含日线数据及 daily_basic 扩展字段的DataFrame
         """
         try:
             df = self.pro.daily(
@@ -156,6 +158,30 @@ class DataFetcher:
 
             # 按日期排序
             df = df.sort_values('trade_date', ascending=True).reset_index(drop=True)
+
+            # 获取 daily_basic 扩展字段并合并
+            try:
+                daily_basic = self.pro.daily_basic(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    fields=",".join(DAILY_BASIC_FETCH_FIELDS),
+                )
+                if daily_basic is not None and not daily_basic.empty:
+                    df = pd.merge(
+                        df,
+                        daily_basic[DAILY_BASIC_FETCH_FIELDS],
+                        on=['ts_code', 'trade_date'],
+                        how='left',
+                    )
+                else:
+                    for field in DAILY_BASIC_FIELDS:
+                        df[field] = None
+            except Exception as e:
+                logger.warning(f"获取 {ts_code} daily_basic 扩展字段失败，置为 null: {e}")
+                for field in DAILY_BASIC_FIELDS:
+                    df[field] = None
+
             return df
 
         except Exception as e:
@@ -477,6 +503,8 @@ class DataFetcher:
 
         for i, code in enumerate(stock_codes, 1):
             try:
+                replace_existing = False
+
                 # 增量更新：获取数据库中最新日期
                 if incremental:
                     latest_date = self.db.get_latest_date(code)
@@ -494,11 +522,27 @@ class DataFetcher:
                             start_date_dt = latest_date + timedelta(days=1)
                         start_date = start_date_dt.strftime('%Y%m%d')
 
-                        # 如果已是最新，跳过（只有当起始日期大于结束日期时才跳过）
+                        # 如果数据库日期已追平，再检查历史记录中是否仍有缺失的
+                        # daily_basic 必填字段。存在缺失值时，从最早缺失日期开始
+                        # 重抓并覆盖该区间。
                         if start_date > end_date:
-                            logger.info(f"[{i}/{len(stock_codes)}] {code} 数据已是最新，跳过")
-                            success_count += 1
-                            continue
+                            missing_daily_basic_range = self.db.get_missing_daily_basic_range(code)
+                            missing_daily_basic_start = (
+                                missing_daily_basic_range[0] if missing_daily_basic_range else None
+                            )
+                            if missing_daily_basic_start:
+                                start_date = missing_daily_basic_start
+                                replace_existing = True
+                                logger.info(
+                                    f"[{i}/{len(stock_codes)}] {code} 最新日期已齐，但存在缺失daily_basic必填字段，"
+                                    f"从 {start_date} 开始重抓"
+                                )
+                            else:
+                                logger.info(
+                                    f"[{i}/{len(stock_codes)}] {code} 数据已是最新且daily_basic必填字段完整，跳过"
+                                )
+                                success_count += 1
+                                continue
                     else:
                         # 数据库中无此股票，获取最近365天数据
                         start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
@@ -508,7 +552,7 @@ class DataFetcher:
 
                 logger.info(f"[{i}/{len(stock_codes)}] 更新 {code} ({start_date} 至 {end_date})")
 
-                if self.process_stock(code, start_date, end_date, replace=False):
+                if self.process_stock(code, start_date, end_date, replace=replace_existing):
                     success_count += 1
                 else:
                     failed_stocks.append(code)

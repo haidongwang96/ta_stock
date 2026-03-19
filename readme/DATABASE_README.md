@@ -17,6 +17,7 @@
 - **文件名**：`stock_data.db`
 - **位置**：项目根目录
 - **类型**：SQLite 3
+- **连接模式**：通过 `StockDatabase` 打开时默认启用 `WAL` + `synchronous=NORMAL`
 
 ### 数据表
 
@@ -47,8 +48,25 @@
 | pct_chg | REAL | 涨跌幅（%） |
 | vol | REAL | 成交量（手） |
 | amount | REAL | 成交额（千元） |
+| turnover_rate | REAL | 换手率（%） |
+| turnover_rate_f | REAL | 自由流通换手率（%） |
+| volume_ratio | REAL | 量比 |
+| pe | REAL | 市盈率 |
+| pe_ttm | REAL | 滚动市盈率（TTM） |
+| pb | REAL | 市净率 |
+| ps | REAL | 市销率 |
+| ps_ttm | REAL | 滚动市销率（TTM） |
+| dv_ratio | REAL | 股息率（%） |
+| dv_ttm | REAL | 滚动股息率（TTM） |
+| total_share | REAL | 总股本（万股） |
+| float_share | REAL | 流通股本（万股） |
+| free_share | REAL | 自由流通股本（万股） |
+| total_mv | REAL | 总市值（万元） |
+| circ_mv | REAL | 流通市值（万元） |
 
-**索引**：(ts_code, trade_date) 组合索引
+**索引**：
+- 唯一约束 `(ts_code, trade_date)`，SQLite 自动维护唯一索引
+- 单列索引 `trade_date`
 
 #### 3. `daily_indicators` - 技术指标数据（预计算）
 | 字段类别 | 字段 | 说明 |
@@ -62,7 +80,15 @@
 | **波动率** | atr | 平均真实波幅 |
 | **趋势** | sar | 抛物线指标 |
 
-**索引**：(ts_code, trade_date) 组合索引
+**索引**：
+- 唯一约束 `(ts_code, trade_date)`，SQLite 自动维护唯一索引
+- 单列索引 `trade_date`
+
+### 结构维护说明
+
+- `stock_basic.ts_code` 是主键
+- `StockDatabase` 初始化时会自动检查并迁移旧版 `stock_basic` 表结构
+- `insert_stock_basic()` 会保留表结构与主键约束，不再通过整表 `replace` 重建
 
 ---
 
@@ -170,6 +196,10 @@ python3 database/fetch_data_to_db.py --update --pool pool/stock_pool_example.txt
 > **💡 建议**：每日收盘后运行一次增量更新，耗时约 **1-2分钟**
 >
 > **🔧 Bug修复**：已修复增量更新无法获取当天数据的问题（原判断条件为 `>=`，已改为 `>`）
+>
+> **📌 扩展字段补齐逻辑**：如果数据库日期已追平，但 `daily_basic` 必填字段
+> (`turnover_rate`、`turnover_rate_f`、`volume_ratio`、`total_share`、`float_share`、`free_share`、`total_mv`、`circ_mv`)
+> 仍有缺失，系统会从最早缺失日期开始重抓并覆盖写回。
 
 ---
 
