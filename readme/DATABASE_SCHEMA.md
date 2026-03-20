@@ -1,10 +1,11 @@
 # 数据库结构说明
 
-本项目使用本地 SQLite 数据库 `stock_data.db`。建表逻辑位于 `database/db_manager.py`，当前核心表有 4 张：
+本项目使用本地 SQLite 数据库 `stock_data.db`。建表逻辑位于 `database/db_manager.py`，当前核心表有 5 张：
 
 - `stock_basic`
 - `daily_ohlcv`
 - `daily_indicators`
+- `daily_pattern_analysis`
 - `rolling_scores`
 
 整体设计偏分析型宽表结构：
@@ -12,9 +13,10 @@
 - `stock_basic` 存股票基础信息
 - `daily_ohlcv` 存原始日线行情
 - `daily_indicators` 存技术指标
+- `daily_pattern_analysis` 存 `stock_analysis.py` 生成的形态分析结果
 - `rolling_scores` 存滚动评分结果
 
-其中，`daily_ohlcv`、`daily_indicators`、`rolling_scores` 都通过 `(ts_code, trade_date)` 关联。
+其中，`daily_ohlcv`、`daily_indicators`、`daily_pattern_analysis`、`rolling_scores` 都通过 `(ts_code, trade_date)` 关联。
 
 ## 表关系
 
@@ -31,6 +33,15 @@ daily_ohlcv
      | 1:1 by (ts_code, trade_date)
      v
 daily_indicators
+  id (PK)
+  ts_code + trade_date (UNIQUE)
+
+daily_ohlcv
+  ts_code + trade_date
+     |
+     | 1:1 by (ts_code, trade_date)
+     v
+daily_pattern_analysis
   id (PK)
   ts_code + trade_date (UNIQUE)
 
@@ -125,7 +136,31 @@ rolling_scores
 | `atr` | ATR 平均真实波幅 |
 | `sar` | 抛物线 SAR |
 
-## 4. rolling_scores
+## 4. daily_pattern_analysis
+
+技术形态分析结果表，由 `scripts/stock_analysis.py` 生成并写入。当前脚本默认只分析共同最新交易日，并将结果落库，不再输出 JSON 文件。
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 自增主键 |
+| `ts_code` | 股票代码 |
+| `trade_date` | 分析对应交易日期 |
+| `stock_name` | 股票名称快照 |
+| `close` | 当日收盘价 |
+| `change_pct` | 相对上一交易日涨跌幅 |
+| `source` | 数据来源，当前固定为 `local_db` |
+| `indicators_json` | 关键指标快照 JSON，例如 RSI、MFI、ATR、VWAP 等 |
+| `patterns_json` | 形态分类 JSON，例如 trend、momentum、signals 等 |
+| `year_stats_json` | 年内统计 JSON，例如 `year_high`、`drop_from_year_high_pct` |
+| `analysis_payload` | 完整分析结果 JSON，作为扩展载荷保留未来新增字段 |
+| `analysis_version` | 分析版本号 |
+| `updated_at` | 写入更新时间 |
+
+说明：
+- 唯一键为 `(ts_code, trade_date)`，同股票同日期会被覆盖式更新
+- 若未来 `stock_analysis.py` 新增指标或结果字段，可先进入 `analysis_payload`，不必立即改表结构
+
+## 5. rolling_scores
 
 滚动评分结果表，主要服务于 `scripts/single_stock_rolling_score.py` 的缓存与查询。
 
@@ -154,8 +189,9 @@ rolling_scores
 1. `database/fetch_data_to_db.py` 从 Tushare 获取股票基础信息和日线行情。
 2. 原始行情与 `daily_basic` 扩展字段合并后写入 `daily_ohlcv`。
 3. 同批行情计算技术指标后写入 `daily_indicators`。
-4. `scripts/daily_stock_scoring.py` 或 `scripts/single_stock_rolling_score.py` 基于行情和指标计算分数。
-5. `database/score_repository.py` 将评分结果写入 `rolling_scores`。
+4. `scripts/stock_analysis.py` 默认从本地数据库读取最近 120 天数据，分析共同最新交易日，并将结果写入 `daily_pattern_analysis`。
+5. `scripts/daily_stock_scoring.py` 或 `scripts/single_stock_rolling_score.py` 基于行情和指标计算分数。
+6. `database/score_repository.py` 将评分结果写入 `rolling_scores`。
 
 ## 运行模式
 
@@ -220,6 +256,25 @@ WHERE turnover_rate IS NULL
    OR total_mv IS NULL
    OR circ_mv IS NULL
 ORDER BY ts_code, trade_date;
+```
+
+查询最近一个交易日的形态分析结果：
+
+```sql
+SELECT ts_code, trade_date, close, change_pct, source, patterns_json, year_stats_json
+FROM daily_pattern_analysis
+WHERE trade_date = (SELECT MAX(trade_date) FROM daily_pattern_analysis)
+ORDER BY ts_code;
+```
+
+查询某只股票最近 20 天的形态分析：
+
+```sql
+SELECT ts_code, trade_date, close, change_pct, indicators_json, patterns_json
+FROM daily_pattern_analysis
+WHERE ts_code = '000001.SZ'
+ORDER BY trade_date DESC
+LIMIT 20;
 ```
 
 查询某只股票评分历史：

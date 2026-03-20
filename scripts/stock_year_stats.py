@@ -24,6 +24,8 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from analysis.year_stats import calculate_year_stats, get_year_start_date
+
 # 导入数据库模块
 try:
     from database.query_helper import StockDataQuery
@@ -31,11 +33,11 @@ except ImportError:
     print("错误: 无法导入 database 模块，请确保在项目根目录下运行脚本")
     sys.exit(1)
 
-# 日志配置
+# 日志配置 - 默认不输出到控制台，除非出错
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.ERROR,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stderr)]
 )
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,7 @@ class StockYearStats:
     def __init__(self):
         self.query = StockDataQuery()
         self.current_year = datetime.now().year
-        self.start_date = f"{self.current_year}0101"
-        logger.info(f"初始化统计工具，统计年份: {self.current_year}")
+        self.start_date = get_year_start_date()
 
     def load_stock_pool(self, pool_file: str) -> List[Dict]:
         """加载股票池"""
@@ -73,7 +74,6 @@ class StockYearStats:
 
                     stock_list.append({'ts_code': ts_code, 'name': name})
             
-            logger.info(f"加载股票池: {pool_file} (共{len(stock_list)}只)")
         except Exception as e:
             logger.error(f"加载股票池失败: {e}")
 
@@ -84,8 +84,6 @@ class StockYearStats:
         results = []
         total = len(stock_list)
         
-        logger.info("开始计算统计数据...")
-        
         for i, stock in enumerate(stock_list, 1):
             ts_code = stock['ts_code']
             name = stock.get('name', '')
@@ -94,31 +92,22 @@ class StockYearStats:
             df = self.query.daily(ts_code, start_date=self.start_date)
             
             if df is None or df.empty:
-                logger.warning(f"[{i}/{total}] {ts_code} {name}: 无数据")
                 continue
                 
-            # 计算统计指标
-            current_price = df['close'].iloc[-1]
-            ytd_high = df['high'].max()
-            ytd_high_close = df['close'].max()
-            
-            # 计算距最高点跌幅
-            drop_from_high = 0.0
-            if ytd_high > 0:
-                drop_from_high = (ytd_high - current_price) / ytd_high * 100
-                
+            year_stats = calculate_year_stats(df)
+            if not year_stats:
+                continue
+
             results.append({
                 '代码': ts_code,
                 '名称': name,
-                '当前价格': round(current_price, 2),
-                '年内最高价': round(ytd_high, 2),
-                '年内最高收盘价': round(ytd_high_close, 2),
-                '距最高点跌幅(%)': round(drop_from_high, 2),
-                '最新日期': df['trade_date'].iloc[-1]
+                '当前价格': year_stats['current_price'],
+                '年内最高价': year_stats['year_high'],
+                '最高价日期': year_stats['year_high_date'],
+                '年内最高收盘价': year_stats['year_high_close'],
+                '距最高点跌幅(%)': year_stats['drop_from_year_high_pct'],
+                '最新日期': year_stats['latest_date'],
             })
-            
-            if i % 10 == 0:
-                logger.info(f"已处理 {i}/{total} 只股票")
 
         return pd.DataFrame(results)
 
@@ -138,36 +127,46 @@ def main():
         # 1. 加载股票池
         stock_list = stats.load_stock_pool(args.pool)
         if not stock_list:
-            logger.error("股票池为空，退出")
             return
 
         # 2. 计算统计数据
         df = stats.calculate_stats(stock_list)
         
         if df.empty:
-            logger.warning("未生成任何统计数据")
             return
 
-        # 3. 输出结果
-        print("\n" + "="*80)
-        print(f"股票年度统计 ({stats.current_year})")
-        print("="*80)
-        
-        # 设置pandas显示选项
-        pd.set_option('display.max_rows', None)
-        pd.set_option('display.unicode.east_asian_width', True)
-        pd.set_option('display.float_format', '{:.2f}'.format)
-        
         # 按跌幅排序（跌幅越大越靠前，即数值越大）
         df_sorted = df.sort_values('距最高点跌幅(%)', ascending=False)
         
-        print(df_sorted.to_string(index=False))
-        print("="*80)
+        # 3. 确定输出路径
+        output_path = args.output
+        if not output_path:
+            # 默认目录
+            output_dir = os.path.join(project_root, 'stock_year_highpoint')
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            
+            # 默认文件名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'year_stats_{timestamp}.csv'
+            output_path = os.path.join(output_dir, filename)
         
         # 4. 保存文件
-        if args.output:
-            df_sorted.to_csv(args.output, index=False, encoding='utf-8-sig')
-            logger.info(f"结果已保存至: {args.output}")
+        # 保存CSV
+        df_sorted.to_csv(output_path, index=False, encoding='utf-8-sig')
+        
+        # 保存TXT
+        txt_output_path = os.path.splitext(output_path)[0] + '.txt'
+        with open(txt_output_path, 'w', encoding='utf-8') as f:
+            f.write("="*80 + "\n")
+            f.write(f"股票年度统计 ({stats.current_year})\n")
+            f.write("="*80 + "\n")
+            f.write(df_sorted.to_string(index=False))
+            f.write("\n" + "="*80 + "\n")
+        
+        # 5. 仅输出文件绝对路径
+        print(os.path.abspath(output_path))
+        print(os.path.abspath(txt_output_path))
             
     finally:
         stats.close()

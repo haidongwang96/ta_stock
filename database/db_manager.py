@@ -6,6 +6,7 @@
 import sqlite3
 import pandas as pd
 import os
+import json
 from datetime import datetime
 from typing import Optional, List, Tuple
 import logging
@@ -290,6 +291,26 @@ class StockDatabase:
             )
         ''')
 
+        # 5. 技术形态分析结果表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS daily_pattern_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                stock_name TEXT,
+                close REAL,
+                change_pct REAL,
+                source TEXT,
+                indicators_json TEXT,
+                patterns_json TEXT,
+                year_stats_json TEXT,
+                analysis_payload TEXT NOT NULL,
+                analysis_version TEXT,
+                updated_at TEXT NOT NULL,
+                UNIQUE(ts_code, trade_date)
+            )
+        ''')
+
         # 创建索引以提高查询性能
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_daily_ohlcv_date
@@ -309,6 +330,16 @@ class StockDatabase:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_rolling_scores_date
             ON rolling_scores(trade_date)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_daily_pattern_analysis_code
+            ON daily_pattern_analysis(ts_code)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_daily_pattern_analysis_date
+            ON daily_pattern_analysis(trade_date)
         ''')
 
         self._drop_redundant_indexes()
@@ -422,6 +453,117 @@ class StockDatabase:
             logger.error(f"插入技术指标数据失败: {e}")
             self.conn.rollback()
             raise
+
+    def save_pattern_analysis_results(
+        self,
+        results: List[dict],
+        source: str = 'local_db',
+        analysis_version: str = 'stock_analysis_v1',
+        replace: bool = True,
+    ):
+        """
+        保存技术形态分析结果。
+
+        Args:
+            results: stock_analysis.py 产生的结果列表
+            source: 数据来源标记
+            analysis_version: 分析结果版本号
+            replace: 是否覆盖同股票同交易日旧记录
+        """
+        if not results:
+            logger.warning("分析结果为空，跳过保存")
+            return
+
+        rows = []
+        updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        for result in results:
+            ts_code = result.get('code')
+            trade_date = result.get('date')
+            if not ts_code or not trade_date:
+                logger.warning("分析结果缺少 code/date，已跳过一条记录")
+                continue
+
+            rows.append({
+                'ts_code': ts_code,
+                'trade_date': str(trade_date),
+                'stock_name': result.get('name'),
+                'close': result.get('close'),
+                'change_pct': result.get('change_pct'),
+                'source': source,
+                'indicators_json': json.dumps(result.get('indicators', {}), ensure_ascii=False),
+                'patterns_json': json.dumps(result.get('patterns', {}), ensure_ascii=False),
+                'year_stats_json': json.dumps(result.get('year_stats', {}), ensure_ascii=False),
+                'analysis_payload': json.dumps(result, ensure_ascii=False),
+                'analysis_version': analysis_version,
+                'updated_at': updated_at,
+            })
+
+        if not rows:
+            logger.warning("没有可保存的分析结果")
+            return
+
+        df = pd.DataFrame(rows)
+
+        try:
+            if replace:
+                for _, row in df.iterrows():
+                    self.conn.execute(
+                        "DELETE FROM daily_pattern_analysis WHERE ts_code = ? AND trade_date = ?",
+                        (row['ts_code'], row['trade_date']),
+                    )
+
+            df.to_sql(
+                'daily_pattern_analysis',
+                self.conn,
+                if_exists='append',
+                index=False,
+                method='multi'
+            )
+            self.conn.commit()
+            logger.info(f"成功保存 {len(df)} 条技术形态分析结果")
+        except sqlite3.IntegrityError:
+            logger.warning("部分技术形态分析结果已存在，跳过重复数据")
+            self.conn.rollback()
+        except Exception as e:
+            logger.error(f"保存技术形态分析结果失败: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_pattern_analysis(
+        self,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+    ) -> pd.DataFrame:
+        """
+        查询技术形态分析结果。
+        """
+        if start_date and '-' in start_date:
+            start_date = start_date.replace('-', '')
+        if end_date and '-' in end_date:
+            end_date = end_date.replace('-', '')
+
+        query = "SELECT * FROM daily_pattern_analysis WHERE 1=1"
+        params = []
+
+        if ts_code:
+            query += " AND ts_code = ?"
+            params.append(ts_code)
+        if start_date:
+            query += " AND trade_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND trade_date <= ?"
+            params.append(end_date)
+
+        query += " ORDER BY trade_date DESC, ts_code ASC"
+
+        try:
+            return pd.read_sql_query(query, self.conn, params=params)
+        except Exception as e:
+            logger.error(f"查询技术形态分析结果失败: {e}")
+            return pd.DataFrame()
 
     def get_stock_list(self) -> pd.DataFrame:
         """
@@ -634,6 +776,7 @@ class StockDatabase:
             cursor = self.conn.cursor()
             cursor.execute("DELETE FROM daily_ohlcv WHERE ts_code = ?", (ts_code,))
             cursor.execute("DELETE FROM daily_indicators WHERE ts_code = ?", (ts_code,))
+            cursor.execute("DELETE FROM daily_pattern_analysis WHERE ts_code = ?", (ts_code,))
             cursor.execute("DELETE FROM stock_basic WHERE ts_code = ?", (ts_code,))
             self.conn.commit()
             logger.info(f"成功删除 {ts_code} 的所有数据")
@@ -670,6 +813,10 @@ class StockDatabase:
             )
             result = cursor.fetchone()
             stats['date_range'] = (result[0], result[1]) if result else (None, None)
+
+            # 技术形态分析记录数
+            cursor = self.conn.execute("SELECT COUNT(*) FROM daily_pattern_analysis")
+            stats['pattern_analysis_records'] = cursor.fetchone()[0]
 
             # 数据库文件大小
             if os.path.exists(self.db_path):

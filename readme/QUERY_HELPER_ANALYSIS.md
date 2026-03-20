@@ -4,6 +4,7 @@
 > 1. `StockDatabase` 连接默认启用 `WAL` + `synchronous=NORMAL`
 > 2. `query_helper.daily()` 透传的 `daily_ohlcv` 字段现在除 OHLCV 外，还可能包含 `daily_basic` 扩展字段
 >    （如 `turnover_rate`、`pe_ttm`、`total_mv`、`circ_mv` 等）
+> 3. `scripts/stock_analysis.py` 现已默认依赖 `StockDataQuery` 从本地数据库读取数据，并将结果写入 `daily_pattern_analysis`
 
 ## 📊 整体评估
 

@@ -1,0 +1,15 @@
+# Core data processing
+pandas
+numpy
+
+# Market data and technical indicators
+tushare
+pandas_ta
+numba
+
+# Plotting and reports
+matplotlib
+tabulate
+
+# Config parsing
+PyYAML

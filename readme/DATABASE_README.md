@@ -84,11 +84,35 @@
 - 唯一约束 `(ts_code, trade_date)`，SQLite 自动维护唯一索引
 - 单列索引 `trade_date`
 
+#### 4. `daily_pattern_analysis` - 技术形态分析结果
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER | 自增主键 |
+| ts_code | TEXT | 股票代码 |
+| trade_date | TEXT | 分析日期（YYYYMMDD） |
+| stock_name | TEXT | 股票名称快照 |
+| close | REAL | 当日收盘价 |
+| change_pct | REAL | 相对上一交易日涨跌幅 |
+| source | TEXT | 数据来源，当前固定为 `local_db` |
+| indicators_json | TEXT | 关键指标快照 JSON |
+| patterns_json | TEXT | 形态分类与组合信号 JSON |
+| year_stats_json | TEXT | 年内高点统计 JSON |
+| analysis_payload | TEXT | 完整分析结果 JSON，预留未来扩展字段 |
+| analysis_version | TEXT | 分析逻辑版本号 |
+| updated_at | TEXT | 写入时间 |
+
+**索引**：
+- 唯一约束 `(ts_code, trade_date)`，避免同股票同日重复记录
+- 单列索引 `ts_code`
+- 单列索引 `trade_date`
+
 ### 结构维护说明
 
 - `stock_basic.ts_code` 是主键
 - `StockDatabase` 初始化时会自动检查并迁移旧版 `stock_basic` 表结构
 - `insert_stock_basic()` 会保留表结构与主键约束，不再通过整表 `replace` 重建
+- `stock_analysis.py` 的结果统一写入 `daily_pattern_analysis`
+- `analysis_payload` 用于承载未来新增字段，减少频繁改表
 
 ---
 
@@ -123,7 +147,7 @@ python3 database/fetch_data_to_db.py --init --codes "688256.SH,603893.SH,300502.
 
 ### 步骤 2：使用本地数据库运行分析
 
-所有现有的分析脚本都已支持本地数据库，只需添加 `--use-local-db` 参数：
+大多数分析脚本都支持本地数据库；其中 `stock_analysis.py` 已改为默认直接读取本地数据库并写回分析结果表。
 
 #### 单股票技术分析
 
@@ -132,14 +156,13 @@ python3 database/fetch_data_to_db.py --init --codes "688256.SH,603893.SH,300502.
 python3 scripts/technical_analysis.py --code 688256.SH --days 60
 
 # 使用本地数据库（速度快100倍+）
-python3 scripts/technical_analysis.py --code 688256.SH --days 60 --use-local-db
+python3 scripts/technical_analysis.py --code 688256.SH --days 60 --db
 ```
 
 #### 批量技术分析
 
 ```bash
 # 使用本地数据库分析股票池
-python3 batch_technical_analysis.py --pool stock_pool_example.txt --use-local-db
 python3 batch_technical_analysis.py --pool stock_pool_example.txt --db
 ```
 
@@ -158,7 +181,14 @@ python3 scripts/advanced_technical_analysis.py --pool pool/stock_pool_example.tx
 ```bash
 # 批量打分排名（4进程并行）
 # 使用本地数据库时，会自动查询所有股票共同的最新日期作为基准
-python3 scripts/daily_stock_scoring.py --pool pool/stock_pool_example.txt --days 60 --workers 4 --use-local-db
+python3 scripts/daily_stock_scoring.py --pool pool/stock_pool_example.txt --days 60 --workers 4 --db
+```
+
+#### 技术形态分析入库
+
+```bash
+# stock_analysis.py 默认读取本地数据库，并将结果写入 daily_pattern_analysis
+python3 scripts/stock_analysis.py --pool pool/stock_pool_example.txt --days 120
 ```
 
 > **💡 智能日期对齐**：当使用本地数据库时，系统会：
@@ -275,6 +305,7 @@ print(stats)
 #   'stock_count': 120,
 #   'ohlcv_records': 29160,
 #   'indicator_records': 29160,
+#   'pattern_analysis_records': 120,
 #   'date_range': ('20230101', '20240101'),
 #   'db_size_mb': 12.5
 # }
@@ -352,7 +383,7 @@ db.close()
 ```
 
 ### Q5: 批量打分时，不同股票数据更新时间不同怎么办？
-**A:** 使用 `--use-local-db` 参数时，系统会自动：
+**A:** 使用本地数据库模式时，系统会自动：
 - 查询所有股票的最新日期
 - 找出共同的最新日期（所有股票都有数据的最新日期）
 - 使用这个统一日期进行分析
@@ -360,7 +391,7 @@ db.close()
 
 **示例**：
 ```bash
-python daily_stock_scoring.py --pool stock_pool_example.txt --use-local-db
+python daily_stock_scoring.py --pool stock_pool_example.txt --db
 ```
 
 输出会显示：
@@ -377,8 +408,8 @@ python daily_stock_scoring.py --pool stock_pool_example.txt --use-local-db
 - 缩短历史数据范围（重新初始化时使用 `--days` 指定更短的天数）
 - 使用 SQLite VACUUM 命令压缩数据库
 
-### Q7: 可以同时使用本地数据库和在线Tushare吗？
-**A:** 可以！脚本默认使用在线Tushare，添加 `--use-local-db` 参数时使用本地数据库。
+### Q7: `stock_analysis.py` 的结果保存在哪里？
+**A:** 结果写入 `daily_pattern_analysis` 表，不再生成 JSON 文件。可以直接用 SQL 或 `StockDatabase.get_pattern_analysis()` 查询。
 
 ### Q8: 数据库损坏怎么办？
 **A:** 删除 `stock_data.db` 文件，重新运行初始化命令。
@@ -408,10 +439,11 @@ ta_stock/
 ├── md/                           # 文档目录
 │   └── DATABASE_README.md        # 本文档
 ├── stock_data.db                 # SQLite数据库文件（初始化后生成）
-├── technical_analysis.py         # 单股票技术分析（支持 --use-local-db）
-├── batch_technical_analysis.py   # 批量技术分析（支持 --use-local-db）
-├── advanced_technical_analysis.py # 高级技术分析（支持 --use-local-db）
-├── daily_stock_scoring.py        # 每日打分排名（支持 --use-local-db + 智能日期对齐）
+├── technical_analysis.py         # 单股票技术分析（支持 --db）
+├── batch_technical_analysis.py   # 批量技术分析（支持 --db）
+├── advanced_technical_analysis.py # 高级技术分析（支持 --db）
+├── daily_stock_scoring.py        # 每日打分排名（支持 --db + 智能日期对齐）
+├── stock_analysis.py             # 技术形态分析，结果写入 daily_pattern_analysis
 └── stock_pool_example.txt        # 股票池示例
 ```
 
@@ -426,9 +458,12 @@ ta_stock/
 python database/fetch_data_to_db.py --update
 
 # 2. 运行分析（使用本地数据库，自动日期对齐）
-python daily_stock_scoring.py --pool stock_pool_example.txt --use-local-db
+python daily_stock_scoring.py --pool stock_pool_example.txt --db
 
-# 3. 查看结果
+# 3. 刷新最新技术形态结果
+python scripts/stock_analysis.py --pool pool/stock_pool_example.txt --days 120
+
+# 4. 查看结果
 cat daily_scoring_results/daily_scoring_report_*.txt
 ```
 
