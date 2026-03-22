@@ -146,8 +146,10 @@ class DataFetcher:
             包含日线数据及 daily_basic 扩展字段的DataFrame
         """
         try:
-            df = self.pro.daily(
+            df = ts.pro_bar(
                 ts_code=ts_code,
+                api=self.pro,
+                adj='qfq',
                 start_date=start_date,
                 end_date=end_date
             )
