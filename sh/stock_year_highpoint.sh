@@ -1,0 +1,1 @@
+python3 scripts/stock_year_stats.py --pool pool/stock_pool_all.txt 
