@@ -27,27 +27,33 @@ class _DummyAnalyzer:
                 ]
             )
 
-        return pd.DataFrame(
-            [
-                {"trade_date": pd.Timestamp("2026-03-17"), "Close": 10.0},
-                {
-                    "trade_date": pd.Timestamp("2026-03-18"),
-                    "Close": 10.8,
-                    "RSI": 60.0,
-                    "MFI": 55.0,
-                    "CCI": 100.0,
-                    "K": 70.0,
-                    "D": 65.0,
-                    "J": 80.0,
-                    "MACD_DIF": 0.1234,
-                    "MACD_DEA": 0.1001,
-                    "MACD_Histogram": 0.0466,
-                    "Volume_Ratio": 1.4,
-                    "VWAP": 10.6,
-                    "ATR": 0.5,
-                },
-            ]
-        )
+        records = []
+        trade_dates = pd.date_range("2026-02-26", periods=21, freq="D")
+        for idx, trade_date in enumerate(trade_dates, start=1):
+            record = {
+                "trade_date": trade_date,
+                "Close": float(idx),
+            }
+            if idx == len(trade_dates):
+                record.update(
+                    {
+                        "RSI": 60.0,
+                        "MFI": 55.0,
+                        "CCI": 100.0,
+                        "K": 70.0,
+                        "D": 65.0,
+                        "J": 80.0,
+                        "MACD_DIF": 0.1234,
+                        "MACD_DEA": 0.1001,
+                        "MACD_Histogram": 0.0466,
+                        "Volume_Ratio": 1.4,
+                        "VWAP": 20.6,
+                        "ATR": 0.5,
+                    }
+                )
+            records.append(record)
+
+        return pd.DataFrame(records)
 
     def calculate_indicators(self, df):
         return df
@@ -89,6 +95,9 @@ class StockAnalysisYearStatsTests(unittest.TestCase):
         self.assertIn("year_stats", result)
         self.assertEqual(result["year_stats"]["year_high"], 12.0)
         self.assertEqual(result["year_stats"]["drop_from_year_high_pct"], 10.0)
+        self.assertEqual(result["pct_5d"], 31.25)
+        self.assertEqual(result["pct_10d"], 90.91)
+        self.assertEqual(result["pct_20d"], 2000.0)
 
     def test_analyze_single_stock_can_skip_year_stats(self):
         with patch("scripts.stock_analysis.StockAnalyzer", _DummyAnalyzer):
@@ -97,6 +106,9 @@ class StockAnalysisYearStatsTests(unittest.TestCase):
             )
 
         self.assertNotIn("year_stats", result)
+        self.assertEqual(result["pct_5d"], 31.25)
+        self.assertEqual(result["pct_10d"], 90.91)
+        self.assertEqual(result["pct_20d"], 2000.0)
 
     def test_save_analysis_results_to_db_defaults_to_local_db(self):
         results = [{"code": "000001.SZ", "date": "20260318", "patterns": {"signals": []}}]

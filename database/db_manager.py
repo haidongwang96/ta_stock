@@ -300,6 +300,9 @@ class StockDatabase:
                 stock_name TEXT,
                 close REAL,
                 change_pct REAL,
+                pct_5d REAL,
+                pct_10d REAL,
+                pct_20d REAL,
                 source TEXT,
                 indicators_json TEXT,
                 patterns_json TEXT,
@@ -310,6 +313,13 @@ class StockDatabase:
                 UNIQUE(ts_code, trade_date)
             )
         ''')
+
+        for field in ['pct_5d', 'pct_10d', 'pct_20d']:
+            try:
+                cursor.execute(f"ALTER TABLE daily_pattern_analysis ADD COLUMN {field} REAL")
+                logger.info(f"成功添加{field}字段")
+            except sqlite3.OperationalError:
+                pass
 
         # 创建索引以提高查询性能
         cursor.execute('''
@@ -490,6 +500,9 @@ class StockDatabase:
                 'stock_name': result.get('name'),
                 'close': result.get('close'),
                 'change_pct': result.get('change_pct'),
+                'pct_5d': result.get('pct_5d'),
+                'pct_10d': result.get('pct_10d'),
+                'pct_20d': result.get('pct_20d'),
                 'source': source,
                 'indicators_json': json.dumps(result.get('indicators', {}), ensure_ascii=False),
                 'patterns_json': json.dumps(result.get('patterns', {}), ensure_ascii=False),

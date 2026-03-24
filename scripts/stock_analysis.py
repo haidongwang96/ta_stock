@@ -468,6 +468,19 @@ def _f(val, prec=2):
         return None
 
 
+def _calculate_period_change_pct(df, period):
+    """计算最新收盘价相对 N 个交易日前收盘价的涨跌幅。"""
+    if df is None or len(df) <= period:
+        return None
+
+    latest_close = df.iloc[-1].get('Close')
+    base_close = df.iloc[-(period + 1)].get('Close')
+    if pd.isna(latest_close) or pd.isna(base_close) or float(base_close) == 0:
+        return None
+
+    return (float(latest_close) / float(base_close) - 1) * 100
+
+
 def save_analysis_results_to_db(results, db_path=None):
     """在主进程中批量保存分析结果，避免多进程直接写 SQLite。"""
     if not results:
@@ -498,6 +511,9 @@ def analyze_single_stock(args):
             (latest['Close'] - df.iloc[-2]['Close']) / df.iloc[-2]['Close'] * 100
             if len(df) > 1 else 0.0
         )
+        pct_5d = _calculate_period_change_pct(df, 5)
+        pct_10d = _calculate_period_change_pct(df, 10)
+        pct_20d = _calculate_period_change_pct(df, 20)
 
         result = {
             'code':       stock_code,
@@ -505,6 +521,9 @@ def analyze_single_stock(args):
             'date':       latest['trade_date'].strftime('%Y%m%d'),
             'close':      _f(latest['Close']),
             'change_pct': _f(change_pct),
+            'pct_5d':     _f(pct_5d),
+            'pct_10d':    _f(pct_10d),
+            'pct_20d':    _f(pct_20d),
             'indicators': {
                 'rsi':          _f(latest.get('RSI')),
                 'mfi':          _f(latest.get('MFI')),

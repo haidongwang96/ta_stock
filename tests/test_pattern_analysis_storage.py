@@ -32,11 +32,20 @@ class PatternAnalysisStorageTests(unittest.TestCase):
                     """
                 ).fetchall()
             }
+            columns = {
+                row[1]
+                for row in db.conn.execute(
+                    "PRAGMA table_info(daily_pattern_analysis)"
+                ).fetchall()
+            }
             db.close()
 
             self.assertIn("daily_pattern_analysis", tables)
             self.assertIn("idx_daily_pattern_analysis_date", indexes)
             self.assertIn("idx_daily_pattern_analysis_code", indexes)
+            self.assertIn("pct_5d", columns)
+            self.assertIn("pct_10d", columns)
+            self.assertIn("pct_20d", columns)
         finally:
             if os.path.exists(db_path):
                 os.remove(db_path)
@@ -51,6 +60,9 @@ class PatternAnalysisStorageTests(unittest.TestCase):
                     "date": "20260318",
                     "close": 10.8,
                     "change_pct": 1.5,
+                    "pct_5d": 3.5,
+                    "pct_10d": 6.8,
+                    "pct_20d": 12.4,
                     "indicators": {"rsi": 60.0, "atr": 0.5},
                     "patterns": {"signals": ["MACD金叉"]},
                     "year_stats": {"year_high": 12.0},
@@ -65,10 +77,16 @@ class PatternAnalysisStorageTests(unittest.TestCase):
             self.assertEqual(saved.loc[0, "trade_date"], "20260318")
             self.assertEqual(saved.loc[0, "close"], 10.8)
             self.assertEqual(saved.loc[0, "change_pct"], 1.5)
+            self.assertEqual(saved.loc[0, "pct_5d"], 3.5)
+            self.assertEqual(saved.loc[0, "pct_10d"], 6.8)
+            self.assertEqual(saved.loc[0, "pct_20d"], 12.4)
             self.assertEqual(saved.loc[0, "source"], "local_db")
 
             analysis_payload = json.loads(saved.loc[0, "analysis_payload"])
             self.assertEqual(analysis_payload["patterns"]["signals"], ["MACD金叉"])
+            self.assertEqual(analysis_payload["pct_5d"], 3.5)
+            self.assertEqual(analysis_payload["pct_10d"], 6.8)
+            self.assertEqual(analysis_payload["pct_20d"], 12.4)
             self.assertEqual(
                 json.loads(saved.loc[0, "indicators_json"]),
                 {"rsi": 60.0, "atr": 0.5},
@@ -90,6 +108,9 @@ class PatternAnalysisStorageTests(unittest.TestCase):
                     "date": "20260318",
                     "close": 10.8,
                     "change_pct": 1.5,
+                    "pct_5d": 3.5,
+                    "pct_10d": 6.8,
+                    "pct_20d": 12.4,
                     "indicators": {"rsi": 60.0},
                     "patterns": {"signals": ["旧信号"]},
                 }
@@ -101,6 +122,9 @@ class PatternAnalysisStorageTests(unittest.TestCase):
                     "date": "20260318",
                     "close": 11.0,
                     "change_pct": 2.2,
+                    "pct_5d": 4.5,
+                    "pct_10d": 7.8,
+                    "pct_20d": 13.4,
                     "indicators": {"rsi": 65.0},
                     "patterns": {"signals": ["新信号"]},
                 }
@@ -112,6 +136,9 @@ class PatternAnalysisStorageTests(unittest.TestCase):
 
             self.assertEqual(len(saved), 1)
             self.assertEqual(saved.loc[0, "close"], 11.0)
+            self.assertEqual(saved.loc[0, "pct_5d"], 4.5)
+            self.assertEqual(saved.loc[0, "pct_10d"], 7.8)
+            self.assertEqual(saved.loc[0, "pct_20d"], 13.4)
             self.assertEqual(json.loads(saved.loc[0, "patterns_json"])["signals"], ["新信号"])
         finally:
             db.close()
