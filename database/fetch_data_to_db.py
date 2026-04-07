@@ -26,6 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DAILY_BASIC_FETCH_FIELDS = ['ts_code', 'trade_date', *DAILY_BASIC_FIELDS]
+PRICE_FIELDS = ['open', 'high', 'low', 'close', 'pre_close']
 
 
 class DataFetcher:
@@ -146,49 +147,219 @@ class DataFetcher:
             包含日线数据及 daily_basic 扩展字段的DataFrame
         """
         try:
-            df = ts.pro_bar(
+            daily_df = self.pro.daily(
                 ts_code=ts_code,
-                api=self.pro,
-                adj='qfq',
                 start_date=start_date,
                 end_date=end_date
             )
 
-            if df is None or df.empty:
+            if daily_df is None or daily_df.empty:
                 logger.warning(f"{ts_code} 在 {start_date} 至 {end_date} 期间无数据")
                 return None
 
-            # 按日期排序
-            df = df.sort_values('trade_date', ascending=True).reset_index(drop=True)
+            daily_basic = self._fetch_daily_basic(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            adj_factor = self._fetch_adj_factor(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
-            # 获取 daily_basic 扩展字段并合并
-            try:
-                daily_basic = self.pro.daily_basic(
-                    ts_code=ts_code,
-                    start_date=start_date,
-                    end_date=end_date,
-                    fields=",".join(DAILY_BASIC_FETCH_FIELDS),
-                )
-                if daily_basic is not None and not daily_basic.empty:
-                    df = pd.merge(
-                        df,
-                        daily_basic[DAILY_BASIC_FETCH_FIELDS],
-                        on=['ts_code', 'trade_date'],
-                        how='left',
-                    )
-                else:
-                    for field in DAILY_BASIC_FIELDS:
-                        df[field] = None
-            except Exception as e:
-                logger.warning(f"获取 {ts_code} daily_basic 扩展字段失败，置为 null: {e}")
-                for field in DAILY_BASIC_FIELDS:
-                    df[field] = None
-
-            return df
+            return self._merge_market_data(daily_df, daily_basic, adj_factor)
 
         except Exception as e:
             logger.error(f"❌ 获取 {ts_code} 日线数据失败: {e}")
             return None
+
+    def _fetch_daily_basic(
+        self,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        trade_date: str = None,
+    ) -> Optional[pd.DataFrame]:
+        """获取 daily_basic 数据，失败时返回空值并记录日志。"""
+        try:
+            kwargs = {
+                'fields': ",".join(DAILY_BASIC_FETCH_FIELDS),
+            }
+            if ts_code is not None:
+                kwargs['ts_code'] = ts_code
+            if start_date is not None:
+                kwargs['start_date'] = start_date
+            if end_date is not None:
+                kwargs['end_date'] = end_date
+            if trade_date is not None:
+                kwargs['trade_date'] = trade_date
+            return self.pro.daily_basic(**kwargs)
+        except Exception as e:
+            target = trade_date or ts_code or f"{start_date}-{end_date}"
+            logger.warning(f"获取 {target} daily_basic 扩展字段失败，置为 null: {e}")
+            return None
+
+    def _fetch_adj_factor(
+        self,
+        ts_code: str = None,
+        start_date: str = None,
+        end_date: str = None,
+        trade_date: str = None,
+    ) -> Optional[pd.DataFrame]:
+        """获取复权因子，失败时退化为未复权价格。"""
+        try:
+            kwargs = {}
+            if ts_code is not None:
+                kwargs['ts_code'] = ts_code
+            if start_date is not None:
+                kwargs['start_date'] = start_date
+            if end_date is not None:
+                kwargs['end_date'] = end_date
+            if trade_date is not None:
+                kwargs['trade_date'] = trade_date
+            return self.pro.adj_factor(**kwargs)
+        except Exception as e:
+            target = trade_date or ts_code or f"{start_date}-{end_date}"
+            logger.warning(f"获取 {target} 复权因子失败，价格将按未复权写入: {e}")
+            return None
+
+    def _prepare_daily_basic(self, daily_basic: Optional[pd.DataFrame]) -> pd.DataFrame:
+        """补齐 daily_basic 缺失字段，避免合并时报 KeyError。"""
+        if daily_basic is None or daily_basic.empty:
+            return pd.DataFrame(columns=DAILY_BASIC_FETCH_FIELDS)
+
+        daily_basic = daily_basic.copy()
+        for field in DAILY_BASIC_FETCH_FIELDS:
+            if field not in daily_basic.columns:
+                daily_basic[field] = None
+        return daily_basic[DAILY_BASIC_FETCH_FIELDS]
+
+    def _prepare_adj_factor(self, adj_factor: Optional[pd.DataFrame]) -> pd.DataFrame:
+        """标准化复权因子列。"""
+        if adj_factor is None or adj_factor.empty:
+            return pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+
+        adj_factor = adj_factor.copy()
+        for field in ['ts_code', 'trade_date', 'adj_factor']:
+            if field not in adj_factor.columns:
+                adj_factor[field] = None
+        return adj_factor[['ts_code', 'trade_date', 'adj_factor']]
+
+    def _apply_local_qfq(self, df: pd.DataFrame) -> pd.DataFrame:
+        """使用区间末日复权因子在本地计算前复权价格。"""
+        if df is None or df.empty or 'adj_factor' not in df.columns:
+            return df
+
+        qfq_df = df.copy()
+        qfq_df['adj_factor'] = pd.to_numeric(qfq_df['adj_factor'], errors='coerce')
+
+        for ts_code, group in qfq_df.groupby('ts_code', sort=False):
+            valid_factors = group['adj_factor'].dropna()
+            if valid_factors.empty:
+                continue
+
+            latest_factor = valid_factors.iloc[-1]
+            if latest_factor == 0:
+                continue
+
+            ratio = (group['adj_factor'] / latest_factor).fillna(1.0)
+            group_index = group.index
+            for price_field in PRICE_FIELDS:
+                if price_field in qfq_df.columns:
+                    qfq_df.loc[group_index, price_field] = (
+                        pd.to_numeric(qfq_df.loc[group_index, price_field], errors='coerce') * ratio
+                    )
+
+            qfq_df.loc[group_index, 'adj_factor'] = group['adj_factor']
+
+        return qfq_df
+
+    def _merge_market_data(
+        self,
+        daily_df: pd.DataFrame,
+        daily_basic: Optional[pd.DataFrame] = None,
+        adj_factor: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """合并日线、daily_basic 和复权因子，并统一按本地 qfq 输出。"""
+        merged_df = daily_df.copy()
+        merged_df = merged_df.sort_values(['ts_code', 'trade_date'], ascending=[True, True]).reset_index(drop=True)
+
+        merged_df = pd.merge(
+            merged_df,
+            self._prepare_daily_basic(daily_basic),
+            on=['ts_code', 'trade_date'],
+            how='left',
+        )
+
+        merged_df = pd.merge(
+            merged_df,
+            self._prepare_adj_factor(adj_factor),
+            on=['ts_code', 'trade_date'],
+            how='left',
+        )
+
+        for field in DAILY_BASIC_FIELDS:
+            if field not in merged_df.columns:
+                merged_df[field] = None
+        if 'adj_factor' not in merged_df.columns:
+            merged_df['adj_factor'] = None
+
+        return self._apply_local_qfq(merged_df)
+
+    def fetch_daily_data_by_trade_date(
+        self,
+        trade_date: str,
+        stock_codes: Optional[List[str]] = None,
+    ) -> Optional[pd.DataFrame]:
+        """按交易日批量抓取日线、daily_basic 和复权因子。"""
+        try:
+            daily_df = self.pro.daily(trade_date=trade_date)
+            if daily_df is None or daily_df.empty:
+                logger.warning(f"{trade_date} 未获取到任何日线数据")
+                return None
+
+            if stock_codes is not None:
+                stock_code_set = set(stock_codes)
+                daily_df = daily_df[daily_df['ts_code'].isin(stock_code_set)].copy()
+                if daily_df.empty:
+                    logger.warning(f"{trade_date} 批量数据中不包含目标股票")
+                    return None
+
+            daily_basic = self._fetch_daily_basic(trade_date=trade_date)
+            if stock_codes is not None and daily_basic is not None and not daily_basic.empty:
+                daily_basic = daily_basic[daily_basic['ts_code'].isin(stock_code_set)].copy()
+
+            adj_factor = self._fetch_adj_factor(trade_date=trade_date)
+            if stock_codes is not None and adj_factor is not None and not adj_factor.empty:
+                adj_factor = adj_factor[adj_factor['ts_code'].isin(stock_code_set)].copy()
+
+            return self._merge_market_data(daily_df, daily_basic, adj_factor)
+
+        except Exception as e:
+            logger.error(f"❌ 批量获取 {trade_date} 日线数据失败: {e}")
+            return None
+
+    def get_open_trade_dates(self, start_date: str, end_date: str) -> List[str]:
+        """获取区间内开市日期列表。"""
+        if start_date > end_date:
+            return []
+
+        try:
+            df = self.pro.trade_cal(
+                exchange='SSE',
+                start_date=start_date,
+                end_date=end_date,
+                fields='cal_date,is_open'
+            )
+            if df is None or df.empty:
+                return []
+
+            open_dates = df[df['is_open'].astype(str) == '1']['cal_date'].tolist()
+            return sorted(open_dates)
+        except Exception as e:
+            logger.warning(f"获取交易日列表失败 ({start_date}-{end_date}): {e}")
+            return []
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -412,6 +583,47 @@ class DataFetcher:
         logger.info(f"✅ {ts_code} 数据处理完成 ({len(daily_df)} 条记录)")
         return True
 
+    def process_trade_date(
+        self,
+        trade_date: str,
+        stock_codes: Optional[List[str]] = None,
+    ) -> bool:
+        """按单个交易日批量更新日线，并重算受影响股票当日指标。"""
+        logger.info(f"开始按交易日批量处理 {trade_date}")
+
+        daily_df = self.fetch_daily_data_by_trade_date(trade_date, stock_codes=stock_codes)
+        if daily_df is None or daily_df.empty:
+            logger.warning(f"❌ {trade_date} 批量获取数据失败或无数据")
+            return False
+
+        self.db.insert_daily_ohlcv(daily_df, replace=False)
+
+        processed_count = 0
+        history_start = (datetime.strptime(trade_date, '%Y%m%d') - timedelta(days=365)).strftime('%Y%m%d')
+
+        for ts_code in daily_df['ts_code'].dropna().unique():
+            history_df = self.db.get_daily_ohlcv(ts_code, history_start, trade_date)
+            if history_df is None or history_df.empty:
+                continue
+
+            if 'id' in history_df.columns:
+                history_df = history_df.drop(columns=['id'])
+
+            history_df = history_df.sort_values('trade_date', ascending=True).reset_index(drop=True)
+            indicators_df = self.calculate_indicators(history_df)
+            if indicators_df.empty:
+                continue
+
+            latest_indicator = indicators_df[indicators_df['trade_date'] == trade_date]
+            if latest_indicator.empty:
+                continue
+
+            self.db.insert_daily_indicators(latest_indicator, replace=True)
+            processed_count += 1
+
+        logger.info(f"✅ {trade_date} 批量处理完成 ({len(daily_df)} 条记录，{processed_count} 只股票指标更新)")
+        return True
+
     def init_database(self, stock_codes: List[str], days: int = 365):
         """
         初始化数据库（全量导入）
@@ -474,6 +686,8 @@ class DataFetcher:
             stock_codes: 要更新的股票代码列表，None表示更新所有股票
             incremental: 是否增量更新（只更新缺失日期）
         """
+        use_batch_trade_date_update = stock_codes is None
+
         # 如果未指定股票列表，从数据库获取
         if stock_codes is None:
             stock_df = self.db.get_stock_list()
@@ -499,6 +713,51 @@ class DataFetcher:
         else:
             logger.warning("未找到最近的交易日，使用今天日期")
             end_date = today.strftime('%Y%m%d')
+
+        if incremental and use_batch_trade_date_update:
+            latest_date = self.db.get_latest_date()
+            if latest_date:
+                if isinstance(latest_date, str):
+                    if '-' in latest_date or ' ' in latest_date:
+                        start_date_dt = pd.to_datetime(latest_date) + timedelta(days=1)
+                    else:
+                        start_date_dt = datetime.strptime(latest_date, '%Y%m%d') + timedelta(days=1)
+                else:
+                    start_date_dt = latest_date + timedelta(days=1)
+                start_date = start_date_dt.strftime('%Y%m%d')
+
+                if start_date <= end_date:
+                    trade_dates = self.get_open_trade_dates(start_date, end_date)
+                    if not trade_dates:
+                        logger.info(f"数据库已更新至 {latest_date}，无需补抓新的交易日")
+                        return
+
+                    success_count = 0
+                    failed_dates = []
+                    for i, trade_date in enumerate(trade_dates, 1):
+                        try:
+                            logger.info(f"[{i}/{len(trade_dates)}] 批量更新交易日 {trade_date}")
+                            if self.process_trade_date(trade_date, stock_codes=stock_codes):
+                                success_count += 1
+                            else:
+                                failed_dates.append(trade_date)
+
+                            time.sleep(0.15)
+                        except Exception as e:
+                            logger.error(f"❌ 批量更新 {trade_date} 时发生错误: {e}")
+                            failed_dates.append(trade_date)
+
+                    logger.info("\n" + "="*60)
+                    logger.info("按交易日批量更新完成！")
+                    logger.info(f"✅ 成功: {success_count} 个交易日")
+                    logger.info(f"❌ 失败: {len(failed_dates)} 个交易日")
+                    if failed_dates:
+                        logger.info(f"   失败列表: {', '.join(failed_dates)}")
+
+                    stats = self.db.get_data_statistics()
+                    logger.info(f"\n数据库总记录: {stats.get('ohlcv_records', 0)} 条")
+                    logger.info("="*60)
+                    return
 
         success_count = 0
         failed_stocks = []

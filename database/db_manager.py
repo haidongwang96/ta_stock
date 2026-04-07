@@ -172,6 +172,7 @@ class StockDatabase:
                 pct_chg REAL,
                 vol REAL,
                 amount REAL,
+                adj_factor REAL,
                 turnover_rate REAL,
                 turnover_rate_f REAL,
                 volume_ratio REAL,
@@ -249,6 +250,12 @@ class StockDatabase:
             pass
 
         # 为 daily_ohlcv 添加 daily_basic 扩展字段（兼容旧数据库）
+        try:
+            cursor.execute("ALTER TABLE daily_ohlcv ADD COLUMN adj_factor REAL")
+            logger.info("成功添加adj_factor字段")
+        except sqlite3.OperationalError:
+            pass
+
         for field in DAILY_BASIC_FIELDS:
             try:
                 cursor.execute(f"ALTER TABLE daily_ohlcv ADD COLUMN {field} REAL")

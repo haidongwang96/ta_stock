@@ -44,9 +44,10 @@ class _FixedDateTime:
 
 
 class _FakeDB:
-    def __init__(self, latest_date, missing_daily_basic_range=None):
+    def __init__(self, latest_date, missing_daily_basic_range=None, stock_codes=None):
         self.latest_date = latest_date
         self.missing_daily_basic_range = missing_daily_basic_range
+        self.stock_codes = stock_codes or ["000001.SZ"]
 
     def get_latest_date(self, ts_code=None):
         return self.latest_date
@@ -54,18 +55,23 @@ class _FakeDB:
     def get_missing_daily_basic_range(self, ts_code):
         return self.missing_daily_basic_range
 
+    def get_stock_list(self):
+        return pd.DataFrame({"ts_code": self.stock_codes})
+
     def get_data_statistics(self):
         return {"ohlcv_records": 0}
 
 
 class FetchDataToDbTests(unittest.TestCase):
-    def _build_fetcher(self, latest_date, missing_daily_basic_range=None):
+    def _build_fetcher(self, latest_date, missing_daily_basic_range=None, stock_codes=None):
         fetcher = DataFetcher.__new__(DataFetcher)
         fetcher.db = _FakeDB(
             latest_date=latest_date,
             missing_daily_basic_range=missing_daily_basic_range,
+            stock_codes=stock_codes,
         )
         fetcher.process_stock = Mock(return_value=True)
+        fetcher.process_trade_date = Mock(return_value=True)
         fetcher.is_trade_date = Mock(return_value=True)
         return fetcher
 
@@ -119,6 +125,59 @@ class FetchDataToDbTests(unittest.TestCase):
         for field in DAILY_BASIC_FIELDS:
             self.assertIn(field, df.columns)
 
+    def test_fetch_daily_data_applies_local_qfq_from_adj_factor(self):
+        fetcher = DataFetcher.__new__(DataFetcher)
+        fetcher.pro = Mock()
+        fetcher.pro.daily.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20260317",
+                    "open": 10.0,
+                    "high": 11.0,
+                    "low": 9.0,
+                    "close": 10.0,
+                    "pre_close": 9.5,
+                    "change": 0.5,
+                    "pct_chg": 5.0,
+                    "vol": 1000,
+                    "amount": 2000,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20260318",
+                    "open": 20.0,
+                    "high": 22.0,
+                    "low": 19.0,
+                    "close": 20.0,
+                    "pre_close": 19.0,
+                    "change": 1.0,
+                    "pct_chg": 5.0,
+                    "vol": 1200,
+                    "amount": 2400,
+                },
+            ]
+        )
+        fetcher.pro.daily_basic.return_value = pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "20260317"},
+                {"ts_code": "000001.SZ", "trade_date": "20260318"},
+            ]
+        )
+        fetcher.pro.adj_factor.return_value = pd.DataFrame(
+            [
+                {"ts_code": "000001.SZ", "trade_date": "20260317", "adj_factor": 1.0},
+                {"ts_code": "000001.SZ", "trade_date": "20260318", "adj_factor": 2.0},
+            ]
+        )
+
+        df = fetcher.fetch_daily_data("000001.SZ", "20260317", "20260318")
+
+        self.assertEqual(df.loc[0, "open"], 5.0)
+        self.assertEqual(df.loc[0, "close"], 5.0)
+        self.assertEqual(df.loc[1, "open"], 20.0)
+        self.assertEqual(df.loc[1, "adj_factor"], 2.0)
+
     def test_update_reprocesses_when_daily_basic_fields_have_gaps(self):
         fetcher = self._build_fetcher(
             latest_date="20260318",
@@ -142,6 +201,23 @@ class FetchDataToDbTests(unittest.TestCase):
         ):
             fetcher.update_database(stock_codes=["000001.SZ"], incremental=True)
 
+        fetcher.process_stock.assert_not_called()
+
+    def test_update_uses_trade_date_batches_for_full_universe_incremental_update(self):
+        fetcher = self._build_fetcher(latest_date="20260316", stock_codes=["000001.SZ", "000002.SZ"])
+        fetcher.get_open_trade_dates = Mock(return_value=["20260317", "20260318"])
+
+        with patch("database.fetch_data_to_db.datetime", _FixedDateTime), patch(
+            "database.fetch_data_to_db.time.sleep"
+        ):
+            fetcher.update_database(stock_codes=None, incremental=True)
+
+        fetcher.process_trade_date.assert_has_calls(
+            [
+                unittest.mock.call("20260317", stock_codes=["000001.SZ", "000002.SZ"]),
+                unittest.mock.call("20260318", stock_codes=["000001.SZ", "000002.SZ"]),
+            ]
+        )
         fetcher.process_stock.assert_not_called()
 
     def test_missing_daily_basic_range_ignores_optional_null_fields(self):
