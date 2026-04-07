@@ -8,6 +8,7 @@ import pandas as pd
 sys.modules.setdefault("tushare", types.SimpleNamespace())
 sys.modules.setdefault("pandas_ta", types.SimpleNamespace())
 
+import database.fetch_data_to_db as fetch_data_to_db_module
 from database.db_manager import StockDatabase
 from database.fetch_data_to_db import DataFetcher
 
@@ -263,6 +264,40 @@ class FetchDataToDbTests(unittest.TestCase):
             )
         finally:
             db.close()
+
+    def test_main_update_all_from_db_uses_batch_trade_date_path(self):
+        fetcher = Mock()
+
+        with patch.object(
+            sys,
+            "argv",
+            ["fetch_data_to_db.py", "--update", "--all-from-db"],
+        ), patch(
+            "database.fetch_data_to_db.DataFetcher",
+            return_value=fetcher,
+        ):
+            fetch_data_to_db_module.main()
+
+        fetcher.update_database.assert_called_once_with(
+            stock_codes=None,
+            incremental=True,
+        )
+        fetcher.close.assert_called_once_with()
+
+    def test_main_rejects_all_from_db_with_explicit_stock_selection(self):
+        with patch.object(
+            sys,
+            "argv",
+            ["fetch_data_to_db.py", "--update", "--all-from-db", "--pool", "pool/stock_pool_all.txt"],
+        ), patch(
+            "database.fetch_data_to_db.DataFetcher",
+        ) as fetcher_cls, patch(
+            "database.fetch_data_to_db.logger.error",
+        ) as logger_error:
+            fetch_data_to_db_module.main()
+
+        fetcher_cls.assert_not_called()
+        logger_error.assert_called_once()
 
 
 if __name__ == "__main__":

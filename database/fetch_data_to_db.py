@@ -885,6 +885,11 @@ def main():
                        help='股票池文件路径，默认使用stock_pool_example.txt')
     parser.add_argument('--codes', type=str,
                        help='指定股票代码，多个代码用逗号分隔，如: 688256.SH,603893.SH')
+    parser.add_argument(
+        '--all-from-db',
+        action='store_true',
+        help='更新时从数据库 stock_basic 读取全量股票，并按交易日批量增量更新',
+    )
     parser.add_argument('--days', type=int, default=365,
                        help='初始化时获取最近N天的数据，默认365天')
     parser.add_argument('--db', type=str,
@@ -898,27 +903,36 @@ def main():
         print("\n错误: 请指定操作类型 --init 或 --update")
         return
 
-    # 获取股票代码列表
-    stock_codes = []
-    if args.codes:
-        # 从命令行参数获取
-        stock_codes = [code.strip() for code in args.codes.split(',')]
-    elif args.pool:
-        # 从指定的股票池文件获取
-        stock_codes = read_stock_pool(args.pool)
-    else:
-        # 使用默认股票池文件
-        default_pool = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            'stock_pool_example.txt'
-        )
-        if os.path.exists(default_pool):
-            stock_codes = read_stock_pool(default_pool)
-        else:
-            logger.error("未找到股票池文件，请使用 --pool 或 --codes 参数指定股票")
+    if args.all_from_db:
+        if args.pool or args.codes:
+            logger.error("--all-from-db 不能与 --pool 或 --codes 同时使用")
+            return
+        if not args.update:
+            logger.error("--all-from-db 仅支持与 --update 一起使用")
             return
 
-    if not stock_codes:
+    # 获取股票代码列表
+    stock_codes = None if args.all_from_db else []
+    if stock_codes is not None:
+        if args.codes:
+            # 从命令行参数获取
+            stock_codes = [code.strip() for code in args.codes.split(',')]
+        elif args.pool:
+            # 从指定的股票池文件获取
+            stock_codes = read_stock_pool(args.pool)
+        else:
+            # 使用默认股票池文件
+            default_pool = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                'stock_pool_example.txt'
+            )
+            if os.path.exists(default_pool):
+                stock_codes = read_stock_pool(default_pool)
+            else:
+                logger.error("未找到股票池文件，请使用 --pool 或 --codes 参数指定股票")
+                return
+
+    if stock_codes == []:
         logger.error("未获取到任何股票代码")
         return
 
@@ -930,7 +944,7 @@ def main():
         if args.init:
             fetcher.init_database(stock_codes, days=args.days)
         elif args.update:
-            fetcher.update_database(stock_codes, incremental=True)
+            fetcher.update_database(stock_codes=stock_codes, incremental=True)
 
         fetcher.close()
 
