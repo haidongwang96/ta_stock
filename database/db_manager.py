@@ -735,6 +735,77 @@ class StockDatabase:
             logger.error(f"查询最新日期失败: {e}")
             return None
 
+    def get_latest_adj_factor(self, ts_code: str) -> Optional[float]:
+        """
+        获取指定股票最新一条非空复权因子。
+
+        Args:
+            ts_code: 股票代码
+
+        Returns:
+            最新复权因子；如果无数据则返回 None
+        """
+        try:
+            query = """
+                SELECT adj_factor
+                FROM daily_ohlcv
+                WHERE ts_code = ?
+                  AND adj_factor IS NOT NULL
+                ORDER BY trade_date DESC
+                LIMIT 1
+            """
+            cursor = self.conn.execute(query, (ts_code,))
+            result = cursor.fetchone()
+            return float(result[0]) if result and result[0] is not None else None
+        except Exception as e:
+            logger.error(f"查询最新复权因子失败 ({ts_code}): {e}")
+            return None
+
+    def rescale_qfq_history(
+        self,
+        ts_code: str,
+        scale_ratio: float,
+        before_trade_date: Optional[str] = None,
+    ):
+        """
+        按比例回刷指定股票已有前复权价格。
+
+        仅缩放价格字段，不改动 change/pct_chg 等涨跌幅字段；这些字段对等比缩放不敏感。
+
+        Args:
+            ts_code: 股票代码
+            scale_ratio: 缩放比例
+            before_trade_date: 仅处理该日期之前的数据（不含当日）
+        """
+        if scale_ratio is None or scale_ratio <= 0:
+            logger.warning(f"非法复权回刷比例，跳过 ({ts_code}): {scale_ratio}")
+            return
+
+        params = [scale_ratio, scale_ratio, scale_ratio, scale_ratio, scale_ratio, ts_code]
+        query = """
+            UPDATE daily_ohlcv
+            SET open = open * ?,
+                high = high * ?,
+                low = low * ?,
+                close = close * ?,
+                pre_close = pre_close * ?
+            WHERE ts_code = ?
+        """
+        if before_trade_date:
+            query += " AND trade_date < ?"
+            params.append(before_trade_date)
+
+        try:
+            cursor = self.conn.execute(query, params)
+            self.conn.commit()
+            logger.info(
+                f"成功回刷 {ts_code} 前复权历史 {cursor.rowcount} 条，比例 {scale_ratio:.8f}"
+            )
+        except Exception as e:
+            logger.error(f"回刷前复权历史失败 ({ts_code}): {e}")
+            self.conn.rollback()
+            raise
+
     def get_date_range(self, ts_code: str) -> Tuple[Optional[str], Optional[str]]:
         """
         获取指定股票的数据日期范围

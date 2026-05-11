@@ -221,6 +221,84 @@ class FetchDataToDbTests(unittest.TestCase):
         )
         fetcher.process_stock.assert_not_called()
 
+    def test_process_stock_rescales_existing_qfq_history_when_latest_adj_factor_changes(self):
+        fetcher = DataFetcher.__new__(DataFetcher)
+        fetcher.db = Mock()
+        fetcher.db.get_latest_adj_factor.return_value = 1.0
+        fetcher.fetch_daily_data = Mock(
+            return_value=pd.DataFrame(
+                [
+                    {
+                        "ts_code": "688256.SH",
+                        "trade_date": "20260508",
+                        "open": 12.0,
+                        "high": 12.5,
+                        "low": 11.8,
+                        "close": 12.2,
+                        "pre_close": 11.9,
+                        "change": 0.3,
+                        "pct_chg": 2.5,
+                        "vol": 1000,
+                        "amount": 2000,
+                        "adj_factor": 1.5,
+                    }
+                ]
+            )
+        )
+        fetcher.db.get_daily_ohlcv.return_value = pd.DataFrame(
+            [
+                {
+                    "ts_code": "688256.SH",
+                    "trade_date": "20260507",
+                    "open": 8.0,
+                    "high": 8.5,
+                    "low": 7.8,
+                    "close": 8.2,
+                    "pre_close": 7.9,
+                    "change": 0.3,
+                    "pct_chg": 3.8,
+                    "vol": 900,
+                    "amount": 1800,
+                    "adj_factor": 1.0,
+                },
+                {
+                    "ts_code": "688256.SH",
+                    "trade_date": "20260508",
+                    "open": 12.0,
+                    "high": 12.5,
+                    "low": 11.8,
+                    "close": 12.2,
+                    "pre_close": 11.9,
+                    "change": 0.3,
+                    "pct_chg": 2.5,
+                    "vol": 1000,
+                    "amount": 2000,
+                    "adj_factor": 1.5,
+                },
+            ]
+        )
+        expected_indicators = pd.DataFrame(
+            [
+                {"ts_code": "688256.SH", "trade_date": "20260507", "ma5": 8.2},
+                {"ts_code": "688256.SH", "trade_date": "20260508", "ma5": 12.2},
+            ]
+        )
+        fetcher.calculate_indicators = Mock(return_value=expected_indicators)
+
+        ok = fetcher.process_stock("688256.SH", "20260508", "20260508", replace=False)
+
+        self.assertTrue(ok)
+        fetcher.db.rescale_qfq_history.assert_called_once_with(
+            "688256.SH",
+            scale_ratio=1.0 / 1.5,
+            before_trade_date="20260508",
+        )
+        fetcher.db.insert_daily_ohlcv.assert_called_once()
+        fetcher.db.insert_daily_indicators.assert_called_once_with(
+            expected_indicators,
+            replace=True,
+        )
+
     def test_missing_daily_basic_range_ignores_optional_null_fields(self):
         db = StockDatabase(":memory:")
         try:
@@ -262,6 +340,56 @@ class FetchDataToDbTests(unittest.TestCase):
                 db.get_missing_daily_basic_range("000001.SZ"),
                 (None, None),
             )
+        finally:
+            db.close()
+
+    def test_rescale_qfq_history_scales_only_price_fields(self):
+        db = StockDatabase(":memory:")
+        try:
+            rows = pd.DataFrame(
+                [
+                    {
+                        "ts_code": "688256.SH",
+                        "trade_date": "20260507",
+                        "open": 100.0,
+                        "high": 110.0,
+                        "low": 90.0,
+                        "close": 105.0,
+                        "pre_close": 95.0,
+                        "change": 10.0,
+                        "pct_chg": 10.5,
+                        "vol": 1000,
+                        "amount": 2000,
+                        "adj_factor": 1.0,
+                    },
+                    {
+                        "ts_code": "688256.SH",
+                        "trade_date": "20260508",
+                        "open": 120.0,
+                        "high": 125.0,
+                        "low": 118.0,
+                        "close": 122.0,
+                        "pre_close": 119.0,
+                        "change": 2.0,
+                        "pct_chg": 1.7,
+                        "vol": 1200,
+                        "amount": 2400,
+                        "adj_factor": 1.5,
+                    },
+                ]
+            )
+            db.insert_daily_ohlcv(rows, replace=False)
+
+            db.rescale_qfq_history("688256.SH", scale_ratio=0.5, before_trade_date="20260508")
+
+            result = db.get_daily_ohlcv("688256.SH")
+            first_row = result[result["trade_date"] == "20260507"].iloc[0]
+            second_row = result[result["trade_date"] == "20260508"].iloc[0]
+
+            self.assertEqual(first_row["open"], 50.0)
+            self.assertEqual(first_row["close"], 52.5)
+            self.assertEqual(first_row["change"], 10.0)
+            self.assertEqual(second_row["open"], 120.0)
         finally:
             db.close()
 

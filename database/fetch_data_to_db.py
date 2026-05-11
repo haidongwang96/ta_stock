@@ -307,6 +307,16 @@ class DataFetcher:
 
         return self._apply_local_qfq(merged_df)
 
+    def _get_latest_adj_factor_from_df(self, df: Optional[pd.DataFrame]) -> Optional[float]:
+        """从结果数据中提取最新一条非空复权因子。"""
+        if df is None or df.empty or 'adj_factor' not in df.columns:
+            return None
+
+        adj_series = pd.to_numeric(df['adj_factor'], errors='coerce').dropna()
+        if adj_series.empty:
+            return None
+        return float(adj_series.iloc[-1])
+
     def fetch_daily_data_by_trade_date(
         self,
         trade_date: str,
@@ -564,21 +574,52 @@ class DataFetcher:
         """
         logger.info(f"开始处理 {ts_code} ({start_date} 至 {end_date})")
 
+        previous_latest_adj_factor = self.db.get_latest_adj_factor(ts_code)
+
         # 1. 获取日线数据
         daily_df = self.fetch_daily_data(ts_code, start_date, end_date)
         if daily_df is None or daily_df.empty:
             logger.warning(f"❌ {ts_code} 获取数据失败或无数据")
             return False
 
+        latest_adj_factor = self._get_latest_adj_factor_from_df(daily_df)
+        qfq_rebased = False
+        if (
+            previous_latest_adj_factor is not None
+            and latest_adj_factor is not None
+            and latest_adj_factor > 0
+            and abs(previous_latest_adj_factor - latest_adj_factor) > 1e-9
+        ):
+            scale_ratio = previous_latest_adj_factor / latest_adj_factor
+            logger.info(
+                f"{ts_code} 最新复权因子变化: {previous_latest_adj_factor} -> {latest_adj_factor}，"
+                f"回刷 {start_date} 之前历史价格"
+            )
+            self.db.rescale_qfq_history(
+                ts_code,
+                scale_ratio=scale_ratio,
+                before_trade_date=start_date,
+            )
+            qfq_rebased = True
+
         # 2. 存储原始OHLCV数据
         self.db.insert_daily_ohlcv(daily_df, replace=replace)
 
         # 3. 计算技术指标
-        indicators_df = self.calculate_indicators(daily_df)
+        indicator_source_df = daily_df
+        indicator_replace = replace
+        if qfq_rebased:
+            indicator_source_df = self.db.get_daily_ohlcv(ts_code)
+            if 'id' in indicator_source_df.columns:
+                indicator_source_df = indicator_source_df.drop(columns=['id'])
+            indicator_source_df = indicator_source_df.sort_values('trade_date', ascending=True).reset_index(drop=True)
+            indicator_replace = True
+
+        indicators_df = self.calculate_indicators(indicator_source_df)
 
         # 4. 存储技术指标
         if not indicators_df.empty:
-            self.db.insert_daily_indicators(indicators_df, replace=replace)
+            self.db.insert_daily_indicators(indicators_df, replace=indicator_replace)
 
         logger.info(f"✅ {ts_code} 数据处理完成 ({len(daily_df)} 条记录)")
         return True
