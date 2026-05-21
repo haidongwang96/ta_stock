@@ -123,6 +123,153 @@ class DbManagerOptimizationTests(unittest.TestCase):
             if os.path.exists(db_path):
                 os.remove(db_path)
 
+    def test_financial_metrics_table_supports_latest_report_query(self):
+        db_path = self._make_temp_db_path()
+        try:
+            db = StockDatabase(db_path)
+            db.insert_financial_metrics(
+                pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "report_date": "20251030",
+                            "end_date": "20250930",
+                            "period_type": "Q3",
+                            "profit": 100.0,
+                            "revenue": 1000.0,
+                            "gross_margin": 42.5,
+                            "net_margin": 10.0,
+                        },
+                        {
+                            "ts_code": "000001.SZ",
+                            "report_date": "20260430",
+                            "end_date": "20260331",
+                            "period_type": "Q1",
+                            "profit": 120.0,
+                            "revenue": 1100.0,
+                            "gross_margin": 43.5,
+                            "net_margin": 10.9,
+                        },
+                    ]
+                )
+            )
+
+            latest = db.get_latest_financial_metrics("000001.SZ")
+            stats = db.get_data_statistics()
+            db.close()
+
+            self.assertEqual(len(latest), 1)
+            self.assertEqual(latest.iloc[0]["report_date"], "20260430")
+            self.assertEqual(latest.iloc[0]["period_type"], "Q1")
+            self.assertEqual(stats["financial_metrics_records"], 2)
+        finally:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+
+    def test_financial_metrics_replace_handles_nullable_period_keys(self):
+        db_path = self._make_temp_db_path()
+        try:
+            db = StockDatabase(db_path)
+            first = pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "report_date": "20260430",
+                        "profit": 100.0,
+                        "revenue": 1000.0,
+                    }
+                ]
+            )
+            second = pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "report_date": "20260430",
+                        "profit": 120.0,
+                        "revenue": 1100.0,
+                    }
+                ]
+            )
+
+            db.insert_financial_metrics(first)
+            db.insert_financial_metrics(second, replace=True)
+            rows = db.get_financial_metrics("000001.SZ")
+            db.close()
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows.iloc[0]["profit"], 120.0)
+            self.assertEqual(rows.iloc[0]["revenue"], 1100.0)
+        finally:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+
+    def test_financial_growth_metrics_use_single_quarter_values(self):
+        db_path = self._make_temp_db_path()
+        try:
+            db = StockDatabase(db_path)
+            db.insert_financial_metrics(
+                pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "report_date": "20250430",
+                            "end_date": "20250331",
+                            "period_type": "Q1",
+                            "profit": 100.0,
+                            "revenue": 1000.0,
+                            "gross_margin": 40.0,
+                            "net_margin": 10.0,
+                        },
+                        {
+                            "ts_code": "000001.SZ",
+                            "report_date": "20250830",
+                            "end_date": "20250630",
+                            "period_type": "H1",
+                            "profit": 250.0,
+                            "revenue": 2300.0,
+                            "gross_margin": 42.0,
+                            "net_margin": 10.87,
+                        },
+                        {
+                            "ts_code": "000001.SZ",
+                            "report_date": "20251030",
+                            "end_date": "20250930",
+                            "period_type": "Q3",
+                            "profit": 450.0,
+                            "revenue": 3900.0,
+                            "gross_margin": 43.0,
+                            "net_margin": 11.54,
+                        },
+                        {
+                            "ts_code": "000001.SZ",
+                            "report_date": "20260430",
+                            "end_date": "20260331",
+                            "period_type": "Q1",
+                            "profit": 120.0,
+                            "revenue": 1100.0,
+                            "gross_margin": 44.0,
+                            "net_margin": 10.91,
+                        },
+                    ]
+                )
+            )
+
+            db.update_financial_growth_metrics(["000001.SZ"])
+            rows = db.get_financial_metrics("000001.SZ")
+            db.close()
+
+            h1 = rows[rows["end_date"] == "20250630"].iloc[0]
+            q1_2026 = rows[rows["end_date"] == "20260331"].iloc[0]
+
+            self.assertEqual(h1["quarter_profit"], 150.0)
+            self.assertEqual(h1["quarter_revenue"], 1300.0)
+            self.assertAlmostEqual(h1["profit_qoq"], 50.0)
+            self.assertAlmostEqual(h1["revenue_qoq"], 30.0)
+            self.assertAlmostEqual(q1_2026["profit_yoy"], 20.0)
+            self.assertAlmostEqual(q1_2026["revenue_yoy"], 10.0)
+        finally:
+            if os.path.exists(db_path):
+                os.remove(db_path)
 
 if __name__ == "__main__":
     unittest.main()

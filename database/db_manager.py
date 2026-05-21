@@ -47,6 +47,21 @@ DAILY_BASIC_REQUIRED_FIELDS = [
     'circ_mv',
 ]
 
+FINANCIAL_DERIVED_FIELDS = [
+    'quarter_profit',
+    'quarter_revenue',
+    'quarter_gross_margin',
+    'quarter_net_margin',
+    'profit_yoy',
+    'profit_qoq',
+    'revenue_yoy',
+    'revenue_qoq',
+    'gross_margin_yoy',
+    'gross_margin_qoq',
+    'net_margin_yoy',
+    'net_margin_qoq',
+]
+
 
 class StockDatabase:
     """股票数据库管理类"""
@@ -321,6 +336,42 @@ class StockDatabase:
             )
         ''')
 
+        # 6. 财务指标表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS financial_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_code TEXT NOT NULL,
+                report_date TEXT NOT NULL,
+                end_date TEXT,
+                period_type TEXT,
+                profit REAL,
+                revenue REAL,
+                gross_margin REAL,
+                net_margin REAL,
+                quarter_profit REAL,
+                quarter_revenue REAL,
+                quarter_gross_margin REAL,
+                quarter_net_margin REAL,
+                profit_yoy REAL,
+                profit_qoq REAL,
+                revenue_yoy REAL,
+                revenue_qoq REAL,
+                gross_margin_yoy REAL,
+                gross_margin_qoq REAL,
+                net_margin_yoy REAL,
+                net_margin_qoq REAL,
+                updated_at TEXT,
+                UNIQUE(ts_code, report_date, end_date, period_type)
+            )
+        ''')
+
+        for field in FINANCIAL_DERIVED_FIELDS:
+            try:
+                cursor.execute(f"ALTER TABLE financial_metrics ADD COLUMN {field} REAL")
+                logger.info(f"成功添加{field}字段")
+            except sqlite3.OperationalError:
+                pass
+
         for field in ['pct_5d', 'pct_10d', 'pct_20d']:
             try:
                 cursor.execute(f"ALTER TABLE daily_pattern_analysis ADD COLUMN {field} REAL")
@@ -357,6 +408,26 @@ class StockDatabase:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_daily_pattern_analysis_date
             ON daily_pattern_analysis(trade_date)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_financial_metrics_code_report
+            ON financial_metrics(ts_code, report_date DESC)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_financial_metrics_end_date
+            ON financial_metrics(end_date)
+        ''')
+
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_metrics_unique_report
+            ON financial_metrics(
+                ts_code,
+                report_date,
+                COALESCE(end_date, ''),
+                COALESCE(period_type, '')
+            )
         ''')
 
         self._drop_redundant_indexes()
@@ -584,6 +655,336 @@ class StockDatabase:
         except Exception as e:
             logger.error(f"查询技术形态分析结果失败: {e}")
             return pd.DataFrame()
+
+    def insert_financial_metrics(self, data: pd.DataFrame, replace: bool = False):
+        """
+        插入财务指标数据。
+
+        Args:
+            data: 包含财务指标的DataFrame
+            replace: 如果为True，则替换同股票同报告记录；否则忽略重复数据
+        """
+        if data is None or data.empty:
+            logger.warning("财务指标数据为空，跳过插入")
+            return
+
+        required_columns = ['ts_code', 'report_date']
+        missing_columns = [col for col in required_columns if col not in data.columns]
+        if missing_columns:
+            logger.error(f"财务指标缺少必需字段: {missing_columns}")
+            return
+
+        df = data.copy()
+        if 'updated_at' not in df.columns:
+            df['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        try:
+            if replace:
+                for _, row in df.iterrows():
+                    self.conn.execute(
+                        """
+                        DELETE FROM financial_metrics
+                        WHERE ts_code = ?
+                          AND report_date = ?
+                          AND COALESCE(end_date, '') = COALESCE(?, '')
+                          AND COALESCE(period_type, '') = COALESCE(?, '')
+                        """,
+                        (
+                            row['ts_code'],
+                            row['report_date'],
+                            row.get('end_date'),
+                            row.get('period_type'),
+                        ),
+                    )
+
+            df.to_sql(
+                'financial_metrics',
+                self.conn,
+                if_exists='append',
+                index=False,
+                method='multi',
+                chunksize=500,
+            )
+            self.conn.commit()
+            logger.info(f"成功插入 {len(df)} 条财务指标数据")
+        except sqlite3.IntegrityError:
+            logger.warning("部分财务指标已存在，跳过重复数据")
+            self.conn.rollback()
+        except Exception as e:
+            logger.error(f"插入财务指标失败: {e}")
+            self.conn.rollback()
+            raise
+
+    def get_financial_metrics(
+        self,
+        ts_code: str,
+        start_report_date: str = None,
+        end_report_date: str = None,
+        latest_only: bool = False,
+    ) -> pd.DataFrame:
+        """
+        获取指定股票的财务指标数据。
+
+        Args:
+            ts_code: 股票代码
+            start_report_date: 最早公告/报告日期 YYYYMMDD 或 YYYY-MM-DD
+            end_report_date: 最晚公告/报告日期 YYYYMMDD 或 YYYY-MM-DD
+            latest_only: 是否只返回最新一条
+        """
+        if start_report_date and '-' in start_report_date:
+            start_report_date = start_report_date.replace('-', '')
+        if end_report_date and '-' in end_report_date:
+            end_report_date = end_report_date.replace('-', '')
+
+        query = "SELECT * FROM financial_metrics WHERE ts_code = ?"
+        params = [ts_code]
+
+        if start_report_date:
+            query += " AND report_date >= ?"
+            params.append(start_report_date)
+        if end_report_date:
+            query += " AND report_date <= ?"
+            params.append(end_report_date)
+
+        query += " ORDER BY report_date DESC, end_date DESC"
+        if latest_only:
+            query += " LIMIT 1"
+
+        try:
+            return pd.read_sql_query(query, self.conn, params=params)
+        except Exception as e:
+            logger.error(f"查询财务指标失败 ({ts_code}): {e}")
+            return pd.DataFrame()
+
+    def get_latest_financial_metrics(self, ts_code: str) -> pd.DataFrame:
+        """
+        获取指定股票最新一条财务指标。
+        """
+        return self.get_financial_metrics(ts_code, latest_only=True)
+
+    def update_financial_growth_metrics(self, ts_codes: List[str] = None) -> int:
+        """
+        基于累计财报数据计算单季值、同比和环比。
+
+        利润/营收先拆成单季值：
+        Q1 = Q1；Q2 = H1 - Q1；Q3 = Q3 - H1；Q4 = FY - Q3。
+        毛利率先用 revenue * gross_margin 还原累计毛利额，再拆单季毛利率。
+        净利率用单季利润 / 单季营收计算。
+        利润/营收同比环比为百分比，毛利率/净利率同比环比为百分点变化。
+        """
+        query = "SELECT * FROM financial_metrics"
+        params = []
+        if ts_codes:
+            placeholders = ",".join(["?"] * len(ts_codes))
+            query += f" WHERE ts_code IN ({placeholders})"
+            params.extend(ts_codes)
+
+        try:
+            df = pd.read_sql_query(query, self.conn, params=params)
+        except Exception as e:
+            logger.error(f"读取财务指标用于增长率计算失败: {e}")
+            return 0
+
+        if df.empty:
+            logger.info("没有财务指标数据可计算同比环比")
+            return 0
+
+        updates = []
+        for _, group in df.groupby('ts_code'):
+            updates.extend(self._calculate_financial_growth_for_stock(group))
+
+        if not updates:
+            logger.info("没有可更新的财务同比环比数据")
+            return 0
+
+        update_sql = """
+            UPDATE financial_metrics
+            SET quarter_profit = ?,
+                quarter_revenue = ?,
+                quarter_gross_margin = ?,
+                quarter_net_margin = ?,
+                profit_yoy = ?,
+                profit_qoq = ?,
+                revenue_yoy = ?,
+                revenue_qoq = ?,
+                gross_margin_yoy = ?,
+                gross_margin_qoq = ?,
+                net_margin_yoy = ?,
+                net_margin_qoq = ?,
+                updated_at = ?
+            WHERE id = ?
+        """
+        updated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        payload = [
+            (
+                row['quarter_profit'],
+                row['quarter_revenue'],
+                row['quarter_gross_margin'],
+                row['quarter_net_margin'],
+                row['profit_yoy'],
+                row['profit_qoq'],
+                row['revenue_yoy'],
+                row['revenue_qoq'],
+                row['gross_margin_yoy'],
+                row['gross_margin_qoq'],
+                row['net_margin_yoy'],
+                row['net_margin_qoq'],
+                updated_at,
+                row['id'],
+            )
+            for row in updates
+        ]
+
+        try:
+            self.conn.executemany(update_sql, payload)
+            self.conn.commit()
+            logger.info(f"成功更新 {len(payload)} 条财务同比环比指标")
+            return len(payload)
+        except Exception as e:
+            logger.error(f"更新财务同比环比指标失败: {e}")
+            self.conn.rollback()
+            raise
+
+    def _calculate_financial_growth_for_stock(self, group: pd.DataFrame) -> List[dict]:
+        group = group.copy()
+        group['period_year'] = group['end_date'].astype(str).str[:4].astype(int)
+        group['period_suffix'] = group['end_date'].astype(str).str[4:8]
+        group['nonnull_count'] = group[
+            ['profit', 'revenue', 'gross_margin', 'net_margin']
+        ].notna().sum(axis=1)
+        group = group.sort_values(['end_date', 'nonnull_count', 'report_date'])
+        group = group.drop_duplicates(subset=['period_year', 'period_suffix'], keep='last')
+
+        period_rows = {
+            (int(row.period_year), row.period_suffix): row
+            for row in group.itertuples(index=False)
+        }
+
+        quarter_values = {}
+        for key, row in period_rows.items():
+            quarter_values[key] = self._financial_quarter_values(row, period_rows)
+
+        updates = []
+        for key, row in period_rows.items():
+            current = quarter_values.get(key, {})
+            previous = self._previous_quarter_key(key)
+            same_quarter_last_year = (key[0] - 1, key[1])
+            previous_values = quarter_values.get(previous, {})
+            yoy_values = quarter_values.get(same_quarter_last_year, {})
+
+            updates.append({
+                'id': row.id,
+                'quarter_profit': current.get('profit'),
+                'quarter_revenue': current.get('revenue'),
+                'quarter_gross_margin': current.get('gross_margin'),
+                'quarter_net_margin': current.get('net_margin'),
+                'profit_yoy': self._pct_change(current.get('profit'), yoy_values.get('profit')),
+                'profit_qoq': self._pct_change(current.get('profit'), previous_values.get('profit')),
+                'revenue_yoy': self._pct_change(current.get('revenue'), yoy_values.get('revenue')),
+                'revenue_qoq': self._pct_change(current.get('revenue'), previous_values.get('revenue')),
+                'gross_margin_yoy': self._point_change(
+                    current.get('gross_margin'), yoy_values.get('gross_margin')
+                ),
+                'gross_margin_qoq': self._point_change(
+                    current.get('gross_margin'), previous_values.get('gross_margin')
+                ),
+                'net_margin_yoy': self._point_change(
+                    current.get('net_margin'), yoy_values.get('net_margin')
+                ),
+                'net_margin_qoq': self._point_change(
+                    current.get('net_margin'), previous_values.get('net_margin')
+                ),
+            })
+
+        return updates
+
+    def _financial_quarter_values(self, row, period_rows: dict) -> dict:
+        year = int(row.period_year)
+        suffix = row.period_suffix
+        profit = self._number_or_none(row.profit)
+        revenue = self._number_or_none(row.revenue)
+        gross_margin = self._number_or_none(row.gross_margin)
+
+        gross_profit = None
+        if revenue is not None and gross_margin is not None:
+            gross_profit = revenue * gross_margin / 100
+
+        if suffix == '0331':
+            quarter_profit = profit
+            quarter_revenue = revenue
+            quarter_gross_profit = gross_profit
+        elif suffix == '0630':
+            q1 = period_rows.get((year, '0331'))
+            quarter_profit = self._subtract(profit, self._number_or_none(getattr(q1, 'profit', None)))
+            quarter_revenue = self._subtract(revenue, self._number_or_none(getattr(q1, 'revenue', None)))
+            quarter_gross_profit = self._subtract(gross_profit, self._gross_profit_from_row(q1))
+        elif suffix == '0930':
+            h1 = period_rows.get((year, '0630'))
+            quarter_profit = self._subtract(profit, self._number_or_none(getattr(h1, 'profit', None)))
+            quarter_revenue = self._subtract(revenue, self._number_or_none(getattr(h1, 'revenue', None)))
+            quarter_gross_profit = self._subtract(gross_profit, self._gross_profit_from_row(h1))
+        elif suffix == '1231':
+            q3 = period_rows.get((year, '0930'))
+            quarter_profit = self._subtract(profit, self._number_or_none(getattr(q3, 'profit', None)))
+            quarter_revenue = self._subtract(revenue, self._number_or_none(getattr(q3, 'revenue', None)))
+            quarter_gross_profit = self._subtract(gross_profit, self._gross_profit_from_row(q3))
+        else:
+            quarter_profit = None
+            quarter_revenue = None
+            quarter_gross_profit = None
+
+        return {
+            'profit': quarter_profit,
+            'revenue': quarter_revenue,
+            'gross_margin': self._ratio_percent(quarter_gross_profit, quarter_revenue),
+            'net_margin': self._ratio_percent(quarter_profit, quarter_revenue),
+        }
+
+    def _gross_profit_from_row(self, row) -> Optional[float]:
+        if row is None:
+            return None
+        revenue = self._number_or_none(getattr(row, 'revenue', None))
+        gross_margin = self._number_or_none(getattr(row, 'gross_margin', None))
+        if revenue is None or gross_margin is None:
+            return None
+        return revenue * gross_margin / 100
+
+    def _previous_quarter_key(self, key: Tuple[int, str]) -> Tuple[int, str]:
+        year, suffix = key
+        if suffix == '0331':
+            return (year - 1, '1231')
+        if suffix == '0630':
+            return (year, '0331')
+        if suffix == '0930':
+            return (year, '0630')
+        if suffix == '1231':
+            return (year, '0930')
+        return (year, suffix)
+
+    def _number_or_none(self, value) -> Optional[float]:
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+
+    def _subtract(self, current, previous) -> Optional[float]:
+        if current is None or previous is None:
+            return None
+        return current - previous
+
+    def _ratio_percent(self, numerator, denominator) -> Optional[float]:
+        if numerator is None or denominator in (None, 0):
+            return None
+        return numerator / denominator * 100
+
+    def _pct_change(self, current, previous) -> Optional[float]:
+        if current is None or previous in (None, 0):
+            return None
+        return (current - previous) / abs(previous) * 100
+
+    def _point_change(self, current, previous) -> Optional[float]:
+        if current is None or previous is None:
+            return None
+        return current - previous
 
     def get_stock_list(self) -> pd.DataFrame:
         """
@@ -868,6 +1269,7 @@ class StockDatabase:
             cursor.execute("DELETE FROM daily_ohlcv WHERE ts_code = ?", (ts_code,))
             cursor.execute("DELETE FROM daily_indicators WHERE ts_code = ?", (ts_code,))
             cursor.execute("DELETE FROM daily_pattern_analysis WHERE ts_code = ?", (ts_code,))
+            cursor.execute("DELETE FROM financial_metrics WHERE ts_code = ?", (ts_code,))
             cursor.execute("DELETE FROM stock_basic WHERE ts_code = ?", (ts_code,))
             self.conn.commit()
             logger.info(f"成功删除 {ts_code} 的所有数据")
@@ -908,6 +1310,10 @@ class StockDatabase:
             # 技术形态分析记录数
             cursor = self.conn.execute("SELECT COUNT(*) FROM daily_pattern_analysis")
             stats['pattern_analysis_records'] = cursor.fetchone()[0]
+
+            # 财务指标记录数
+            cursor = self.conn.execute("SELECT COUNT(*) FROM financial_metrics")
+            stats['financial_metrics_records'] = cursor.fetchone()[0]
 
             # 数据库文件大小
             if os.path.exists(self.db_path):
