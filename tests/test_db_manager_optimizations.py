@@ -217,6 +217,11 @@ class DbManagerOptimizationTests(unittest.TestCase):
                             "period_type": "Q1",
                             "profit": 100.0,
                             "revenue": 1000.0,
+                            "deducted_profit": 80.0,
+                            "operating_cash_flow": 120.0,
+                            "sales_expense": 20.0,
+                            "admin_expense": 30.0,
+                            "rd_expense": 40.0,
                             "gross_margin": 40.0,
                             "net_margin": 10.0,
                         },
@@ -227,6 +232,11 @@ class DbManagerOptimizationTests(unittest.TestCase):
                             "period_type": "H1",
                             "profit": 250.0,
                             "revenue": 2300.0,
+                            "deducted_profit": 200.0,
+                            "operating_cash_flow": 330.0,
+                            "sales_expense": 50.0,
+                            "admin_expense": 70.0,
+                            "rd_expense": 100.0,
                             "gross_margin": 42.0,
                             "net_margin": 10.87,
                         },
@@ -237,6 +247,11 @@ class DbManagerOptimizationTests(unittest.TestCase):
                             "period_type": "Q3",
                             "profit": 450.0,
                             "revenue": 3900.0,
+                            "deducted_profit": 350.0,
+                            "operating_cash_flow": 490.0,
+                            "sales_expense": 90.0,
+                            "admin_expense": 120.0,
+                            "rd_expense": 180.0,
                             "gross_margin": 43.0,
                             "net_margin": 11.54,
                         },
@@ -247,6 +262,11 @@ class DbManagerOptimizationTests(unittest.TestCase):
                             "period_type": "Q1",
                             "profit": 120.0,
                             "revenue": 1100.0,
+                            "deducted_profit": 96.0,
+                            "operating_cash_flow": 132.0,
+                            "sales_expense": 22.0,
+                            "admin_expense": 33.0,
+                            "rd_expense": 44.0,
                             "gross_margin": 44.0,
                             "net_margin": 10.91,
                         },
@@ -263,10 +283,16 @@ class DbManagerOptimizationTests(unittest.TestCase):
 
             self.assertEqual(h1["quarter_profit"], 150.0)
             self.assertEqual(h1["quarter_revenue"], 1300.0)
+            self.assertEqual(h1["quarter_deducted_profit"], 120.0)
+            self.assertEqual(h1["quarter_operating_cash_flow"], 210.0)
+            self.assertAlmostEqual(h1["quarter_ocf_to_profit"], 1.4)
+            self.assertAlmostEqual(h1["quarter_rd_expense_rate"], 60.0 / 1300.0 * 100)
             self.assertAlmostEqual(h1["profit_qoq"], 50.0)
             self.assertAlmostEqual(h1["revenue_qoq"], 30.0)
             self.assertAlmostEqual(q1_2026["profit_yoy"], 20.0)
             self.assertAlmostEqual(q1_2026["revenue_yoy"], 10.0)
+            self.assertAlmostEqual(q1_2026["deducted_profit_yoy"], 20.0)
+            self.assertAlmostEqual(q1_2026["operating_cash_flow_yoy"], 10.0)
         finally:
             if os.path.exists(db_path):
                 os.remove(db_path)

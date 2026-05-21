@@ -47,6 +47,9 @@ INCOME_FIELDS = [
     'revenue',
     'total_profit',
     'n_income',
+    'sell_exp',
+    'admin_exp',
+    'rd_exp',
 ]
 
 INDICATOR_FIELDS = [
@@ -55,6 +58,17 @@ INDICATOR_FIELDS = [
     'end_date',
     'grossprofit_margin',
     'netprofit_margin',
+    'profit_dedt',
+    'roe',
+    'roic',
+    'debt_to_assets',
+]
+
+CASHFLOW_FIELDS = [
+    'ts_code',
+    'ann_date',
+    'end_date',
+    'n_cashflow_act',
 ]
 
 
@@ -160,6 +174,7 @@ class FinancialMetricsUpdater:
         """获取单只股票最近报告期财务指标。"""
         income_rows = []
         indicator_rows = []
+        cashflow_rows = []
 
         for period in periods:
             try:
@@ -184,29 +199,29 @@ class FinancialMetricsUpdater:
             except Exception as e:
                 logger.warning(f"{ts_code} {period} 财务指标获取失败: {e}")
 
+            try:
+                cashflow_df = self.pro.cashflow(
+                    ts_code=ts_code,
+                    period=period,
+                    fields=','.join(CASHFLOW_FIELDS),
+                )
+                if cashflow_df is not None and not cashflow_df.empty:
+                    cashflow_rows.append(cashflow_df)
+            except Exception as e:
+                logger.warning(f"{ts_code} {period} 现金流量表获取失败: {e}")
+
         income = pd.concat(income_rows, ignore_index=True) if income_rows else pd.DataFrame()
         indicator = pd.concat(indicator_rows, ignore_index=True) if indicator_rows else pd.DataFrame()
+        cashflow = pd.concat(cashflow_rows, ignore_index=True) if cashflow_rows else pd.DataFrame()
 
-        if income.empty and indicator.empty:
+        if income.empty and indicator.empty and cashflow.empty:
             return pd.DataFrame()
 
         income = self._dedupe_by_latest_ann_date(income)
         indicator = self._dedupe_by_latest_ann_date(indicator)
+        cashflow = self._dedupe_by_latest_ann_date(cashflow)
 
-        if income.empty:
-            merged = indicator.copy()
-        elif indicator.empty:
-            merged = income.copy()
-        else:
-            merged = pd.merge(
-                income,
-                indicator,
-                on=['ts_code', 'end_date'],
-                how='outer',
-                suffixes=('_income', '_indicator'),
-            )
-
-        return self._normalize_metrics(merged)
+        return self._normalize_metrics(self._merge_metric_frames(income, indicator, cashflow))
 
     def fetch_income_metric(self, ts_code: str, period: str) -> Optional[dict]:
         """单只股票拉取利润表。income 接口不可靠支持逗号批量 ts_code。"""
@@ -264,6 +279,22 @@ class FinancialMetricsUpdater:
             logger.warning(f"{period} income_vip批量获取失败，将依赖单股补齐: {e}")
             return pd.DataFrame()
 
+    def fetch_period_cashflow_vip(
+        self,
+        period: str,
+        stock_codes: List[str],
+        batch_size: int,
+    ) -> pd.DataFrame:
+        """使用 cashflow_vip 按股票池分批拉取现金流量表。"""
+        return self._fetch_period_api_in_batches(
+            api_func=self.pro.cashflow_vip,
+            api_name='现金流量表VIP',
+            period=period,
+            stock_codes=stock_codes,
+            fields=CASHFLOW_FIELDS,
+            batch_size=batch_size,
+        )
+
     def fetch_period_metrics(
         self,
         period: str,
@@ -272,6 +303,7 @@ class FinancialMetricsUpdater:
     ) -> pd.DataFrame:
         """按报告期分批获取股票池财务指标。"""
         income = self.fetch_period_income_vip(period)
+        cashflow = self.fetch_period_cashflow_vip(period, stock_codes, batch_size)
         indicator = self._fetch_period_api_in_batches(
             api_func=self.pro.fina_indicator,
             api_name='财务指标',
@@ -281,7 +313,11 @@ class FinancialMetricsUpdater:
             batch_size=batch_size,
         )
 
-        if (income is None or income.empty) and (indicator is None or indicator.empty):
+        if (
+            (income is None or income.empty)
+            and (indicator is None or indicator.empty)
+            and (cashflow is None or cashflow.empty)
+        ):
             return pd.DataFrame()
 
         income = self._dedupe_by_latest_ann_date(income) if income is not None else pd.DataFrame()
@@ -289,21 +325,31 @@ class FinancialMetricsUpdater:
             self._dedupe_by_latest_ann_date(indicator)
             if indicator is not None else pd.DataFrame()
         )
+        cashflow = self._dedupe_by_latest_ann_date(cashflow) if cashflow is not None else pd.DataFrame()
 
-        if income.empty:
-            merged = indicator.copy()
-        elif indicator.empty:
-            merged = income.copy()
-        else:
-            merged = pd.merge(
-                income,
-                indicator,
-                on=['ts_code', 'end_date'],
-                how='outer',
-                suffixes=('_income', '_indicator'),
-            )
+        return self._normalize_metrics(self._merge_metric_frames(income, indicator, cashflow))
 
-        return self._normalize_metrics(merged)
+    def _merge_metric_frames(
+        self,
+        income: pd.DataFrame,
+        indicator: pd.DataFrame,
+        cashflow: pd.DataFrame,
+    ) -> pd.DataFrame:
+        frames = []
+        if income is not None and not income.empty:
+            frames.append(income.rename(columns={'ann_date': 'ann_date_income'}))
+        if indicator is not None and not indicator.empty:
+            frames.append(indicator.rename(columns={'ann_date': 'ann_date_indicator'}))
+        if cashflow is not None and not cashflow.empty:
+            frames.append(cashflow.rename(columns={'ann_date': 'ann_date_cashflow'}))
+
+        if not frames:
+            return pd.DataFrame()
+
+        merged = frames[0]
+        for frame in frames[1:]:
+            merged = pd.merge(merged, frame, on=['ts_code', 'end_date'], how='outer')
+        return merged
 
     def _fetch_period_api_in_batches(
         self,
@@ -442,6 +488,7 @@ class FinancialMetricsUpdater:
             ann_date = self._latest_date_value(
                 row.get('ann_date_income'),
                 row.get('ann_date_indicator'),
+                row.get('ann_date_cashflow'),
                 row.get('ann_date'),
             )
             report_date = ann_date if not pd.isna(ann_date) else end_date
@@ -453,6 +500,15 @@ class FinancialMetricsUpdater:
             if pd.isna(revenue):
                 revenue = row.get('revenue')
 
+            operating_cash_flow = row.get('n_cashflow_act')
+            ocf_to_profit = None
+            if not pd.isna(operating_cash_flow) and not pd.isna(profit) and profit != 0:
+                ocf_to_profit = operating_cash_flow / profit
+
+            sales_expense = row.get('sell_exp')
+            admin_expense = row.get('admin_exp')
+            rd_expense = row.get('rd_exp')
+
             rows.append({
                 'ts_code': row.get('ts_code'),
                 'report_date': str(report_date),
@@ -462,6 +518,18 @@ class FinancialMetricsUpdater:
                 'revenue': None if pd.isna(revenue) else revenue,
                 'gross_margin': self._nullable_value(row.get('grossprofit_margin')),
                 'net_margin': self._nullable_value(row.get('netprofit_margin')),
+                'deducted_profit': self._nullable_value(row.get('profit_dedt')),
+                'operating_cash_flow': self._nullable_value(operating_cash_flow),
+                'ocf_to_profit': self._nullable_value(ocf_to_profit),
+                'roe': self._nullable_value(row.get('roe')),
+                'roic': self._nullable_value(row.get('roic')),
+                'debt_to_assets': self._nullable_value(row.get('debt_to_assets')),
+                'sales_expense': self._nullable_value(sales_expense),
+                'admin_expense': self._nullable_value(admin_expense),
+                'rd_expense': self._nullable_value(rd_expense),
+                'sales_expense_rate': self._expense_rate(sales_expense, revenue),
+                'admin_expense_rate': self._expense_rate(admin_expense, revenue),
+                'rd_expense_rate': self._expense_rate(rd_expense, revenue),
             })
 
         if not rows:
@@ -472,6 +540,11 @@ class FinancialMetricsUpdater:
 
     def _nullable_value(self, value):
         return None if pd.isna(value) else value
+
+    def _expense_rate(self, expense, revenue):
+        if pd.isna(expense) or pd.isna(revenue) or revenue == 0:
+            return None
+        return expense / revenue * 100
 
     def _latest_date_value(self, *values):
         valid_values = [str(value) for value in values if not pd.isna(value)]

@@ -48,18 +48,54 @@ DAILY_BASIC_REQUIRED_FIELDS = [
 ]
 
 FINANCIAL_DERIVED_FIELDS = [
+    'deducted_profit',
+    'operating_cash_flow',
+    'ocf_to_profit',
+    'roe',
+    'roic',
+    'debt_to_assets',
+    'sales_expense',
+    'admin_expense',
+    'rd_expense',
+    'sales_expense_rate',
+    'admin_expense_rate',
+    'rd_expense_rate',
     'quarter_profit',
     'quarter_revenue',
+    'quarter_deducted_profit',
+    'quarter_operating_cash_flow',
     'quarter_gross_margin',
     'quarter_net_margin',
+    'quarter_ocf_to_profit',
+    'quarter_sales_expense_rate',
+    'quarter_admin_expense_rate',
+    'quarter_rd_expense_rate',
     'profit_yoy',
     'profit_qoq',
     'revenue_yoy',
     'revenue_qoq',
+    'deducted_profit_yoy',
+    'deducted_profit_qoq',
+    'operating_cash_flow_yoy',
+    'operating_cash_flow_qoq',
     'gross_margin_yoy',
     'gross_margin_qoq',
     'net_margin_yoy',
     'net_margin_qoq',
+    'ocf_to_profit_yoy',
+    'ocf_to_profit_qoq',
+    'roe_yoy',
+    'roe_qoq',
+    'roic_yoy',
+    'roic_qoq',
+    'debt_to_assets_yoy',
+    'debt_to_assets_qoq',
+    'sales_expense_rate_yoy',
+    'sales_expense_rate_qoq',
+    'admin_expense_rate_yoy',
+    'admin_expense_rate_qoq',
+    'rd_expense_rate_yoy',
+    'rd_expense_rate_qoq',
 ]
 
 
@@ -348,18 +384,54 @@ class StockDatabase:
                 revenue REAL,
                 gross_margin REAL,
                 net_margin REAL,
+                deducted_profit REAL,
+                operating_cash_flow REAL,
+                ocf_to_profit REAL,
+                roe REAL,
+                roic REAL,
+                debt_to_assets REAL,
+                sales_expense REAL,
+                admin_expense REAL,
+                rd_expense REAL,
+                sales_expense_rate REAL,
+                admin_expense_rate REAL,
+                rd_expense_rate REAL,
                 quarter_profit REAL,
                 quarter_revenue REAL,
+                quarter_deducted_profit REAL,
+                quarter_operating_cash_flow REAL,
                 quarter_gross_margin REAL,
                 quarter_net_margin REAL,
+                quarter_ocf_to_profit REAL,
+                quarter_sales_expense_rate REAL,
+                quarter_admin_expense_rate REAL,
+                quarter_rd_expense_rate REAL,
                 profit_yoy REAL,
                 profit_qoq REAL,
                 revenue_yoy REAL,
                 revenue_qoq REAL,
+                deducted_profit_yoy REAL,
+                deducted_profit_qoq REAL,
+                operating_cash_flow_yoy REAL,
+                operating_cash_flow_qoq REAL,
                 gross_margin_yoy REAL,
                 gross_margin_qoq REAL,
                 net_margin_yoy REAL,
                 net_margin_qoq REAL,
+                ocf_to_profit_yoy REAL,
+                ocf_to_profit_qoq REAL,
+                roe_yoy REAL,
+                roe_qoq REAL,
+                roic_yoy REAL,
+                roic_qoq REAL,
+                debt_to_assets_yoy REAL,
+                debt_to_assets_qoq REAL,
+                sales_expense_rate_yoy REAL,
+                sales_expense_rate_qoq REAL,
+                admin_expense_rate_yoy REAL,
+                admin_expense_rate_qoq REAL,
+                rd_expense_rate_yoy REAL,
+                rd_expense_rate_qoq REAL,
                 updated_at TEXT,
                 UNIQUE(ts_code, report_date, end_date, period_type)
             )
@@ -801,16 +873,40 @@ class StockDatabase:
             UPDATE financial_metrics
             SET quarter_profit = ?,
                 quarter_revenue = ?,
+                quarter_deducted_profit = ?,
+                quarter_operating_cash_flow = ?,
                 quarter_gross_margin = ?,
                 quarter_net_margin = ?,
+                quarter_ocf_to_profit = ?,
+                quarter_sales_expense_rate = ?,
+                quarter_admin_expense_rate = ?,
+                quarter_rd_expense_rate = ?,
                 profit_yoy = ?,
                 profit_qoq = ?,
                 revenue_yoy = ?,
                 revenue_qoq = ?,
+                deducted_profit_yoy = ?,
+                deducted_profit_qoq = ?,
+                operating_cash_flow_yoy = ?,
+                operating_cash_flow_qoq = ?,
                 gross_margin_yoy = ?,
                 gross_margin_qoq = ?,
                 net_margin_yoy = ?,
                 net_margin_qoq = ?,
+                ocf_to_profit_yoy = ?,
+                ocf_to_profit_qoq = ?,
+                roe_yoy = ?,
+                roe_qoq = ?,
+                roic_yoy = ?,
+                roic_qoq = ?,
+                debt_to_assets_yoy = ?,
+                debt_to_assets_qoq = ?,
+                sales_expense_rate_yoy = ?,
+                sales_expense_rate_qoq = ?,
+                admin_expense_rate_yoy = ?,
+                admin_expense_rate_qoq = ?,
+                rd_expense_rate_yoy = ?,
+                rd_expense_rate_qoq = ?,
                 updated_at = ?
             WHERE id = ?
         """
@@ -819,16 +915,40 @@ class StockDatabase:
             (
                 row['quarter_profit'],
                 row['quarter_revenue'],
+                row['quarter_deducted_profit'],
+                row['quarter_operating_cash_flow'],
                 row['quarter_gross_margin'],
                 row['quarter_net_margin'],
+                row['quarter_ocf_to_profit'],
+                row['quarter_sales_expense_rate'],
+                row['quarter_admin_expense_rate'],
+                row['quarter_rd_expense_rate'],
                 row['profit_yoy'],
                 row['profit_qoq'],
                 row['revenue_yoy'],
                 row['revenue_qoq'],
+                row['deducted_profit_yoy'],
+                row['deducted_profit_qoq'],
+                row['operating_cash_flow_yoy'],
+                row['operating_cash_flow_qoq'],
                 row['gross_margin_yoy'],
                 row['gross_margin_qoq'],
                 row['net_margin_yoy'],
                 row['net_margin_qoq'],
+                row['ocf_to_profit_yoy'],
+                row['ocf_to_profit_qoq'],
+                row['roe_yoy'],
+                row['roe_qoq'],
+                row['roic_yoy'],
+                row['roic_qoq'],
+                row['debt_to_assets_yoy'],
+                row['debt_to_assets_qoq'],
+                row['sales_expense_rate_yoy'],
+                row['sales_expense_rate_qoq'],
+                row['admin_expense_rate_yoy'],
+                row['admin_expense_rate_qoq'],
+                row['rd_expense_rate_yoy'],
+                row['rd_expense_rate_qoq'],
                 updated_at,
                 row['id'],
             )
@@ -876,12 +996,30 @@ class StockDatabase:
                 'id': row.id,
                 'quarter_profit': current.get('profit'),
                 'quarter_revenue': current.get('revenue'),
+                'quarter_deducted_profit': current.get('deducted_profit'),
+                'quarter_operating_cash_flow': current.get('operating_cash_flow'),
                 'quarter_gross_margin': current.get('gross_margin'),
                 'quarter_net_margin': current.get('net_margin'),
+                'quarter_ocf_to_profit': current.get('ocf_to_profit'),
+                'quarter_sales_expense_rate': current.get('sales_expense_rate'),
+                'quarter_admin_expense_rate': current.get('admin_expense_rate'),
+                'quarter_rd_expense_rate': current.get('rd_expense_rate'),
                 'profit_yoy': self._pct_change(current.get('profit'), yoy_values.get('profit')),
                 'profit_qoq': self._pct_change(current.get('profit'), previous_values.get('profit')),
                 'revenue_yoy': self._pct_change(current.get('revenue'), yoy_values.get('revenue')),
                 'revenue_qoq': self._pct_change(current.get('revenue'), previous_values.get('revenue')),
+                'deducted_profit_yoy': self._pct_change(
+                    current.get('deducted_profit'), yoy_values.get('deducted_profit')
+                ),
+                'deducted_profit_qoq': self._pct_change(
+                    current.get('deducted_profit'), previous_values.get('deducted_profit')
+                ),
+                'operating_cash_flow_yoy': self._pct_change(
+                    current.get('operating_cash_flow'), yoy_values.get('operating_cash_flow')
+                ),
+                'operating_cash_flow_qoq': self._pct_change(
+                    current.get('operating_cash_flow'), previous_values.get('operating_cash_flow')
+                ),
                 'gross_margin_yoy': self._point_change(
                     current.get('gross_margin'), yoy_values.get('gross_margin')
                 ),
@@ -894,6 +1032,40 @@ class StockDatabase:
                 'net_margin_qoq': self._point_change(
                     current.get('net_margin'), previous_values.get('net_margin')
                 ),
+                'ocf_to_profit_yoy': self._point_change(
+                    current.get('ocf_to_profit'), yoy_values.get('ocf_to_profit')
+                ),
+                'ocf_to_profit_qoq': self._point_change(
+                    current.get('ocf_to_profit'), previous_values.get('ocf_to_profit')
+                ),
+                'roe_yoy': self._point_change(row.roe, getattr(yoy_values.get('source_row'), 'roe', None)),
+                'roe_qoq': self._point_change(row.roe, getattr(previous_values.get('source_row'), 'roe', None)),
+                'roic_yoy': self._point_change(row.roic, getattr(yoy_values.get('source_row'), 'roic', None)),
+                'roic_qoq': self._point_change(row.roic, getattr(previous_values.get('source_row'), 'roic', None)),
+                'debt_to_assets_yoy': self._point_change(
+                    row.debt_to_assets, getattr(yoy_values.get('source_row'), 'debt_to_assets', None)
+                ),
+                'debt_to_assets_qoq': self._point_change(
+                    row.debt_to_assets, getattr(previous_values.get('source_row'), 'debt_to_assets', None)
+                ),
+                'sales_expense_rate_yoy': self._point_change(
+                    current.get('sales_expense_rate'), yoy_values.get('sales_expense_rate')
+                ),
+                'sales_expense_rate_qoq': self._point_change(
+                    current.get('sales_expense_rate'), previous_values.get('sales_expense_rate')
+                ),
+                'admin_expense_rate_yoy': self._point_change(
+                    current.get('admin_expense_rate'), yoy_values.get('admin_expense_rate')
+                ),
+                'admin_expense_rate_qoq': self._point_change(
+                    current.get('admin_expense_rate'), previous_values.get('admin_expense_rate')
+                ),
+                'rd_expense_rate_yoy': self._point_change(
+                    current.get('rd_expense_rate'), yoy_values.get('rd_expense_rate')
+                ),
+                'rd_expense_rate_qoq': self._point_change(
+                    current.get('rd_expense_rate'), previous_values.get('rd_expense_rate')
+                ),
             })
 
         return updates
@@ -903,6 +1075,11 @@ class StockDatabase:
         suffix = row.period_suffix
         profit = self._number_or_none(row.profit)
         revenue = self._number_or_none(row.revenue)
+        deducted_profit = self._number_or_none(getattr(row, 'deducted_profit', None))
+        operating_cash_flow = self._number_or_none(getattr(row, 'operating_cash_flow', None))
+        sales_expense = self._number_or_none(getattr(row, 'sales_expense', None))
+        admin_expense = self._number_or_none(getattr(row, 'admin_expense', None))
+        rd_expense = self._number_or_none(getattr(row, 'rd_expense', None))
         gross_margin = self._number_or_none(row.gross_margin)
 
         gross_profit = None
@@ -912,32 +1089,94 @@ class StockDatabase:
         if suffix == '0331':
             quarter_profit = profit
             quarter_revenue = revenue
+            quarter_deducted_profit = deducted_profit
+            quarter_operating_cash_flow = operating_cash_flow
+            quarter_sales_expense = sales_expense
+            quarter_admin_expense = admin_expense
+            quarter_rd_expense = rd_expense
             quarter_gross_profit = gross_profit
         elif suffix == '0630':
             q1 = period_rows.get((year, '0331'))
             quarter_profit = self._subtract(profit, self._number_or_none(getattr(q1, 'profit', None)))
             quarter_revenue = self._subtract(revenue, self._number_or_none(getattr(q1, 'revenue', None)))
+            quarter_deducted_profit = self._subtract(
+                deducted_profit, self._number_or_none(getattr(q1, 'deducted_profit', None))
+            )
+            quarter_operating_cash_flow = self._subtract(
+                operating_cash_flow, self._number_or_none(getattr(q1, 'operating_cash_flow', None))
+            )
+            quarter_sales_expense = self._subtract(
+                sales_expense, self._number_or_none(getattr(q1, 'sales_expense', None))
+            )
+            quarter_admin_expense = self._subtract(
+                admin_expense, self._number_or_none(getattr(q1, 'admin_expense', None))
+            )
+            quarter_rd_expense = self._subtract(
+                rd_expense, self._number_or_none(getattr(q1, 'rd_expense', None))
+            )
             quarter_gross_profit = self._subtract(gross_profit, self._gross_profit_from_row(q1))
         elif suffix == '0930':
             h1 = period_rows.get((year, '0630'))
             quarter_profit = self._subtract(profit, self._number_or_none(getattr(h1, 'profit', None)))
             quarter_revenue = self._subtract(revenue, self._number_or_none(getattr(h1, 'revenue', None)))
+            quarter_deducted_profit = self._subtract(
+                deducted_profit, self._number_or_none(getattr(h1, 'deducted_profit', None))
+            )
+            quarter_operating_cash_flow = self._subtract(
+                operating_cash_flow, self._number_or_none(getattr(h1, 'operating_cash_flow', None))
+            )
+            quarter_sales_expense = self._subtract(
+                sales_expense, self._number_or_none(getattr(h1, 'sales_expense', None))
+            )
+            quarter_admin_expense = self._subtract(
+                admin_expense, self._number_or_none(getattr(h1, 'admin_expense', None))
+            )
+            quarter_rd_expense = self._subtract(
+                rd_expense, self._number_or_none(getattr(h1, 'rd_expense', None))
+            )
             quarter_gross_profit = self._subtract(gross_profit, self._gross_profit_from_row(h1))
         elif suffix == '1231':
             q3 = period_rows.get((year, '0930'))
             quarter_profit = self._subtract(profit, self._number_or_none(getattr(q3, 'profit', None)))
             quarter_revenue = self._subtract(revenue, self._number_or_none(getattr(q3, 'revenue', None)))
+            quarter_deducted_profit = self._subtract(
+                deducted_profit, self._number_or_none(getattr(q3, 'deducted_profit', None))
+            )
+            quarter_operating_cash_flow = self._subtract(
+                operating_cash_flow, self._number_or_none(getattr(q3, 'operating_cash_flow', None))
+            )
+            quarter_sales_expense = self._subtract(
+                sales_expense, self._number_or_none(getattr(q3, 'sales_expense', None))
+            )
+            quarter_admin_expense = self._subtract(
+                admin_expense, self._number_or_none(getattr(q3, 'admin_expense', None))
+            )
+            quarter_rd_expense = self._subtract(
+                rd_expense, self._number_or_none(getattr(q3, 'rd_expense', None))
+            )
             quarter_gross_profit = self._subtract(gross_profit, self._gross_profit_from_row(q3))
         else:
             quarter_profit = None
             quarter_revenue = None
+            quarter_deducted_profit = None
+            quarter_operating_cash_flow = None
+            quarter_sales_expense = None
+            quarter_admin_expense = None
+            quarter_rd_expense = None
             quarter_gross_profit = None
 
         return {
             'profit': quarter_profit,
             'revenue': quarter_revenue,
+            'deducted_profit': quarter_deducted_profit,
+            'operating_cash_flow': quarter_operating_cash_flow,
             'gross_margin': self._ratio_percent(quarter_gross_profit, quarter_revenue),
             'net_margin': self._ratio_percent(quarter_profit, quarter_revenue),
+            'ocf_to_profit': self._ratio_plain(quarter_operating_cash_flow, quarter_profit),
+            'sales_expense_rate': self._ratio_percent(quarter_sales_expense, quarter_revenue),
+            'admin_expense_rate': self._ratio_percent(quarter_admin_expense, quarter_revenue),
+            'rd_expense_rate': self._ratio_percent(quarter_rd_expense, quarter_revenue),
+            'source_row': row,
         }
 
     def _gross_profit_from_row(self, row) -> Optional[float]:
@@ -976,12 +1215,21 @@ class StockDatabase:
             return None
         return numerator / denominator * 100
 
+    def _ratio_plain(self, numerator, denominator) -> Optional[float]:
+        if numerator is None or denominator in (None, 0):
+            return None
+        return numerator / denominator
+
     def _pct_change(self, current, previous) -> Optional[float]:
+        current = self._number_or_none(current)
+        previous = self._number_or_none(previous)
         if current is None or previous in (None, 0):
             return None
         return (current - previous) / abs(previous) * 100
 
     def _point_change(self, current, previous) -> Optional[float]:
+        current = self._number_or_none(current)
+        previous = self._number_or_none(previous)
         if current is None or previous is None:
             return None
         return current - previous
