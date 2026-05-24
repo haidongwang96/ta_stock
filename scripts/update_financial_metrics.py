@@ -170,7 +170,12 @@ class FinancialMetricsUpdater:
         ts.set_token(token)
         return ts.pro_api()
 
-    def fetch_stock_metrics(self, ts_code: str, periods: List[str]) -> pd.DataFrame:
+    def fetch_stock_metrics(
+        self,
+        ts_code: str,
+        periods: List[str],
+        include_cashflow: bool = False,
+    ) -> pd.DataFrame:
         """获取单只股票最近报告期财务指标。"""
         income_rows = []
         indicator_rows = []
@@ -199,16 +204,17 @@ class FinancialMetricsUpdater:
             except Exception as e:
                 logger.warning(f"{ts_code} {period} 财务指标获取失败: {e}")
 
-            try:
-                cashflow_df = self.pro.cashflow(
-                    ts_code=ts_code,
-                    period=period,
-                    fields=','.join(CASHFLOW_FIELDS),
-                )
-                if cashflow_df is not None and not cashflow_df.empty:
-                    cashflow_rows.append(cashflow_df)
-            except Exception as e:
-                logger.warning(f"{ts_code} {period} 现金流量表获取失败: {e}")
+            if include_cashflow:
+                try:
+                    cashflow_df = self.pro.cashflow(
+                        ts_code=ts_code,
+                        period=period,
+                        fields=','.join(CASHFLOW_FIELDS),
+                    )
+                    if cashflow_df is not None and not cashflow_df.empty:
+                        cashflow_rows.append(cashflow_df)
+                except Exception as e:
+                    logger.warning(f"{ts_code} {period} 现金流量表获取失败: {e}")
 
         income = pd.concat(income_rows, ignore_index=True) if income_rows else pd.DataFrame()
         indicator = pd.concat(indicator_rows, ignore_index=True) if indicator_rows else pd.DataFrame()
@@ -300,10 +306,14 @@ class FinancialMetricsUpdater:
         period: str,
         stock_codes: List[str],
         batch_size: int = 80,
+        include_cashflow: bool = False,
     ) -> pd.DataFrame:
         """按报告期分批获取股票池财务指标。"""
         income = self.fetch_period_income_vip(period)
-        cashflow = self.fetch_period_cashflow_vip(period, stock_codes, batch_size)
+        cashflow = (
+            self.fetch_period_cashflow_vip(period, stock_codes, batch_size)
+            if include_cashflow else pd.DataFrame()
+        )
         indicator = self._fetch_period_api_in_batches(
             api_func=self.pro.fina_indicator,
             api_name='财务指标',
@@ -480,6 +490,7 @@ class FinancialMetricsUpdater:
 
     def _normalize_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         rows = []
+        has_cashflow = 'n_cashflow_act' in df.columns
         for _, row in df.iterrows():
             end_date = row.get('end_date')
             if pd.isna(end_date):
@@ -500,7 +511,7 @@ class FinancialMetricsUpdater:
             if pd.isna(revenue):
                 revenue = row.get('revenue')
 
-            operating_cash_flow = row.get('n_cashflow_act')
+            operating_cash_flow = row.get('n_cashflow_act') if has_cashflow else None
             ocf_to_profit = None
             if not pd.isna(operating_cash_flow) and not pd.isna(profit) and profit != 0:
                 ocf_to_profit = operating_cash_flow / profit
@@ -509,7 +520,7 @@ class FinancialMetricsUpdater:
             admin_expense = row.get('admin_exp')
             rd_expense = row.get('rd_exp')
 
-            rows.append({
+            result_row = {
                 'ts_code': row.get('ts_code'),
                 'report_date': str(report_date),
                 'end_date': str(end_date),
@@ -519,8 +530,6 @@ class FinancialMetricsUpdater:
                 'gross_margin': self._nullable_value(row.get('grossprofit_margin')),
                 'net_margin': self._nullable_value(row.get('netprofit_margin')),
                 'deducted_profit': self._nullable_value(row.get('profit_dedt')),
-                'operating_cash_flow': self._nullable_value(operating_cash_flow),
-                'ocf_to_profit': self._nullable_value(ocf_to_profit),
                 'roe': self._nullable_value(row.get('roe')),
                 'roic': self._nullable_value(row.get('roic')),
                 'debt_to_assets': self._nullable_value(row.get('debt_to_assets')),
@@ -530,7 +539,11 @@ class FinancialMetricsUpdater:
                 'sales_expense_rate': self._expense_rate(sales_expense, revenue),
                 'admin_expense_rate': self._expense_rate(admin_expense, revenue),
                 'rd_expense_rate': self._expense_rate(rd_expense, revenue),
-            })
+            }
+            if has_cashflow:
+                result_row['operating_cash_flow'] = self._nullable_value(operating_cash_flow)
+                result_row['ocf_to_profit'] = self._nullable_value(ocf_to_profit)
+            rows.append(result_row)
 
         if not rows:
             return pd.DataFrame()
@@ -681,6 +694,7 @@ class FinancialMetricsUpdater:
         periods: List[str],
         latest_only: bool = True,
         sleep_seconds: float = 0.2,
+        include_cashflow: bool = False,
     ):
         total = len(stock_codes)
         success_count = 0
@@ -693,7 +707,11 @@ class FinancialMetricsUpdater:
 
         for index, ts_code in enumerate(stock_codes, start=1):
             try:
-                metrics = self.fetch_stock_metrics(ts_code, periods)
+                metrics = self.fetch_stock_metrics(
+                    ts_code,
+                    periods,
+                    include_cashflow=include_cashflow,
+                )
                 if metrics.empty:
                     empty_count += 1
                     logger.warning(f"[{index}/{total}] {ts_code} 未获取到财务指标")
@@ -729,6 +747,7 @@ class FinancialMetricsUpdater:
         sleep_seconds: float = 0.2,
         batch_size: int = 80,
         repair_income: bool = True,
+        include_cashflow: bool = False,
     ):
         """按报告期分批拉取股票池财务数据。"""
         stock_set = set(stock_codes)
@@ -745,6 +764,7 @@ class FinancialMetricsUpdater:
                 period=period,
                 stock_codes=stock_codes,
                 batch_size=batch_size,
+                include_cashflow=include_cashflow,
             )
             if metrics.empty:
                 logger.warning(f"[{index}/{len(periods)}] {period} 未获取到财务指标")
@@ -822,6 +842,11 @@ def main():
         help='跳过income单股补齐，速度更快但profit/revenue可能为空',
     )
     parser.add_argument(
+        '--include-cashflow',
+        action='store_true',
+        help='拉取经营现金流；部分Tushare账号cashflow_vip只有1次/分钟，默认跳过',
+    )
+    parser.add_argument(
         '--fetch-mode',
         choices=['period', 'stock'],
         default='period',
@@ -871,6 +896,7 @@ def main():
                 sleep_seconds=args.sleep,
                 batch_size=args.batch_size,
                 repair_income=not args.skip_income_repair,
+                include_cashflow=args.include_cashflow,
             )
         else:
             updater.update_pool(
@@ -878,6 +904,7 @@ def main():
                 periods=periods,
                 latest_only=not args.all_periods,
                 sleep_seconds=args.sleep,
+                include_cashflow=args.include_cashflow,
             )
     finally:
         updater.close()

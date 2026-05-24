@@ -752,7 +752,31 @@ class StockDatabase:
 
         try:
             if replace:
-                for _, row in df.iterrows():
+                for idx, row in df.iterrows():
+                    existing_cashflow = self.conn.execute(
+                        """
+                        SELECT operating_cash_flow, ocf_to_profit
+                        FROM financial_metrics
+                        WHERE ts_code = ?
+                          AND report_date = ?
+                          AND COALESCE(end_date, '') = COALESCE(?, '')
+                          AND COALESCE(period_type, '') = COALESCE(?, '')
+                        LIMIT 1
+                        """,
+                        (
+                            row['ts_code'],
+                            row['report_date'],
+                            row.get('end_date'),
+                            row.get('period_type'),
+                        ),
+                    ).fetchone()
+                    if existing_cashflow:
+                        for field, value in zip(['operating_cash_flow', 'ocf_to_profit'], existing_cashflow):
+                            if field not in df.columns:
+                                df[field] = None
+                            if pd.isna(df.at[idx, field]):
+                                df.at[idx, field] = value
+
                     self.conn.execute(
                         """
                         DELETE FROM financial_metrics
